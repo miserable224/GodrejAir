@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SecurityOps.Api/SecurityOps.Api.csproj" />
+    <Project Path="src/SecurityOps.Application/SecurityOps.Application.csproj" />
+    <Project Path="src/SecurityOps.Domain/SecurityOps.Domain.csproj" />
+    <Project Path="src/SecurityOps.Infrastructure/SecurityOps.Infrastructure.csproj" />
+  </Folder>
+</Solution>
