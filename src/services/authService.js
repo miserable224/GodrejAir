@@ -1,4 +1,4 @@
-import { Platform } from 'react-native';
+import { getApiOrigin } from '../config/apiConfig';
 import { loadStoredSession, saveStoredSession, clearStoredSession } from './authStorage';
 import {
   mapApiRoleToNavRole,
@@ -9,17 +9,9 @@ import {
 
 export { API_ROLES, mapApiRoleToNavRole, normalizeApiRole, getRoleLabel };
 
-function resolveOrigin() {
-  const env = process.env.EXPO_PUBLIC_API_URL;
-  if (env && typeof env === 'string') {
-    return env.replace(/\/+$/, '').replace(/\/api$/i, '');
-  }
-  if (Platform.OS === 'android') return 'http://10.0.2.2:5115';
-  return 'http://localhost:5115';
+function authBase() {
+  return `${getApiOrigin()}/api/auth`;
 }
-
-const API_ORIGIN = resolveOrigin();
-const AUTH_BASE = `${API_ORIGIN}/api/auth`;
 
 function normalizeTokenResponse(data) {
   return {
@@ -55,7 +47,7 @@ async function parseAuthError(res) {
 }
 
 export async function sendAdminOtp(email) {
-  const res = await fetch(`${AUTH_BASE}/admin/send-otp`, {
+  const res = await fetch(`${authBase()}/admin/send-otp`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: email.trim().toLowerCase() }),
@@ -69,7 +61,7 @@ export async function sendAdminOtp(email) {
 }
 
 export async function verifyAdminOtp(email, otp, displayName) {
-  const res = await fetch(`${AUTH_BASE}/admin/verify-otp`, {
+  const res = await fetch(`${authBase()}/admin/verify-otp`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -93,7 +85,7 @@ export async function verifyAdminOtp(email, otp, displayName) {
 }
 
 export async function loginWithCredentials(username, password) {
-  const res = await fetch(`${AUTH_BASE}/login`, {
+  const res = await fetch(`${authBase()}/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username: username.trim(), password }),
@@ -110,7 +102,7 @@ export async function loginWithCredentials(username, password) {
 }
 
 export async function refreshSession(refreshToken) {
-  const res = await fetch(`${AUTH_BASE}/refresh`, {
+  const res = await fetch(`${authBase()}/refresh`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ refreshToken }),
@@ -131,7 +123,7 @@ export async function refreshSession(refreshToken) {
 export async function logoutOnServer(refreshToken) {
   if (!refreshToken) return;
   try {
-    await fetch(`${AUTH_BASE}/logout`, {
+    await fetch(`${authBase()}/logout`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refreshToken }),

@@ -11,26 +11,31 @@
  */
 
 import { Platform } from 'react-native';
+import { getApiOrigin, resolveApiOrigin } from '../config/apiConfig';
 import { ensureValidAccessToken, forceRefreshAccessToken } from './authService';
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
-function resolveOrigin() {
-  const env = process.env.EXPO_PUBLIC_API_URL;
-  if (env && typeof env === 'string') {
-    return env.replace(/\/+$/, '').replace(/\/api$/i, '');
-  }
-  if (Platform.OS === 'android') {
-    // Android emulator routes 10.0.2.2 to the host machine.
-    // On a physical device set EXPO_PUBLIC_API_URL to your LAN IP.
-    return 'http://10.0.2.2:5115';
-  }
-  // web + iOS simulator both reach localhost directly
-  return 'http://localhost:5115';
+/** @deprecated Prefer getApiOrigin() — may be localhost when env is missing at build time. */
+export const API_ORIGIN = resolveApiOrigin() ?? 'http://localhost:5115';
+
+function apiBase() {
+  return `${getApiOrigin()}/api`;
 }
 
-export const API_ORIGIN = resolveOrigin();
-const BASE = `${API_ORIGIN}/api`;
+async function fetchWithNetworkHint(url, options) {
+  try {
+    return await fetch(url, options);
+  } catch (err) {
+    const msg = err?.message || '';
+    if (err?.name === 'TypeError' && /fetch|network|failed/i.test(msg)) {
+      throw new Error(
+        `Cannot reach API at ${getApiOrigin()}. Ensure EXPO_PUBLIC_API_URL is set in Vercel to your live HTTPS API and redeploy.`,
+      );
+    }
+    throw err;
+  }
+}
 
 // ─── Cache ─────────────────────────────────────────────────────────────────
 
@@ -72,7 +77,7 @@ async function apiFetch(path, token, signal, retried = false) {
     throw new AuthError('Not signed in');
   }
 
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetchWithNetworkHint(`${apiBase()}${path}`, {
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     signal,
   });
@@ -251,8 +256,16 @@ async function appendPhotoToFormData(formData, photo) {
   if (Platform.OS === 'web') {
     const name = photoFileName(uri);
     const response = await fetch(uri);
+    if (!response.ok) {
+      throw new Error('Could not read the selected photo. Try Gallery instead of Camera.');
+    }
     const blob = await response.blob();
-    formData.append('file', blob, name);
+    const type = blob.type || photoMimeType(name);
+    const file =
+      typeof File !== 'undefined'
+        ? new File([blob], name, { type })
+        : Object.assign(blob, { name, type });
+    formData.append('file', file, name);
     return;
   }
 
@@ -271,7 +284,7 @@ export async function uploadSecurityPhoto(token, photo, signal) {
   const formData = new FormData();
   await appendPhotoToFormData(formData, photo);
 
-  const res = await fetch(`${BASE}/security/media/upload`, {
+  const res = await fetchWithNetworkHint(`${apiBase()}/security/media/upload`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}` },
     body: formData,
@@ -290,7 +303,7 @@ export async function postDailyAttendance(token, payload, signal) {
   const accessToken = token || (await ensureValidAccessToken());
   if (!accessToken) throw new AuthError('Not signed in');
 
-  const res = await fetch(`${BASE}/security/attendance/daily-entry`, {
+  const res = await fetchWithNetworkHint(`${apiBase()}/security/attendance/daily-entry`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -337,7 +350,7 @@ export async function postMobilePatrol(token, payload, signal) {
     photoUrls: [photoUrl],
   };
 
-  const res = await fetch(`${BASE}/security/patrols/mobile`, {
+  const res = await fetchWithNetworkHint(`${apiBase()}/security/patrols/mobile`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -353,7 +366,7 @@ export async function postMobilePatrol(token, payload, signal) {
 }
 
 export async function postStaffMember(token, payload, signal) {
-  const res = await fetch(`${BASE}/security/staff`, {
+  const res = await fetchWithNetworkHint(`${apiBase()}/security/staff`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
