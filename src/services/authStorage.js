@@ -13,11 +13,17 @@ async function webGet() {
 }
 
 async function webSet(value) {
-  if (value == null) {
-    globalThis.localStorage?.removeItem(SESSION_KEY);
-    return;
+  try {
+    if (value == null) {
+      globalThis.localStorage?.removeItem(SESSION_KEY);
+      return;
+    }
+    globalThis.localStorage?.setItem(SESSION_KEY, JSON.stringify(value));
+  } catch {
+    throw new Error(
+      'Could not save your session in this browser. Turn off Private Browsing or allow site storage for Godrej Air.',
+    );
   }
-  globalThis.localStorage?.setItem(SESSION_KEY, JSON.stringify(value));
 }
 
 export async function loadStoredSession() {

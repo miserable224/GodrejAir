@@ -98,6 +98,8 @@ function DarkField({
   onFocus,
   onBlur,
   rightElement,
+  onSubmitEditing,
+  returnKeyType,
 }) {
   return (
     <View style={[styles.fieldBox, focused && styles.fieldBoxFocused]}>
@@ -118,6 +120,9 @@ function DarkField({
         maxLength={maxLength}
         onFocus={onFocus}
         onBlur={onBlur}
+        onSubmitEditing={onSubmitEditing}
+        returnKeyType={returnKeyType}
+        blurOnSubmit={!onSubmitEditing}
       />
       {rightElement}
     </View>
@@ -208,10 +213,13 @@ export default function LoginScreen() {
   };
 
   const handleSignIn = async () => {
-    if (!username.trim() || !password) return;
+    if (loggingIn || !username.trim() || !password) return;
     setLoggingIn(true);
-    await login(username, password);
-    setLoggingIn(false);
+    try {
+      await login(username, password);
+    } finally {
+      setLoggingIn(false);
+    }
   };
 
   const handleSendOtp = async () => {
@@ -420,6 +428,10 @@ export default function LoginScreen() {
                   focused={focusedField === 'pass'}
                   onFocus={() => setFocusedField('pass')}
                   onBlur={() => setFocusedField(null)}
+                  returnKeyType="go"
+                  onSubmitEditing={() => {
+                    if (!signInDisabled) handleSignIn();
+                  }}
                   rightElement={
                     password.length > 0 ? (
                       <Pressable onPress={() => setShowPass(!showPass)} hitSlop={10}>

@@ -376,6 +376,21 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 }
 
 function AnimatedBrandLogo() {
+  if (Platform.OS === 'web') {
+    return (
+      <View style={styles.screenLogoOuter}>
+        <View style={styles.screenLogoWrap}>
+          <Image
+            source={BRAND_LOGO}
+            style={styles.screenLogoImage}
+            resizeMode="cover"
+            accessibilityLabel="Godrej Air"
+          />
+        </View>
+      </View>
+    );
+  }
+
   const floatY = useSharedValue(0);
   const glow = useSharedValue(1);
 

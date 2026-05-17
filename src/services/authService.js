@@ -1,4 +1,5 @@
 import { getApiOrigin } from '../config/apiConfig';
+import { fetchWithNetworkHint } from '../utils/networkError';
 import { loadStoredSession, saveStoredSession, clearStoredSession } from './authStorage';
 import {
   mapApiRoleToNavRole,
@@ -12,6 +13,9 @@ export { API_ROLES, mapApiRoleToNavRole, normalizeApiRole, getRoleLabel };
 function authBase() {
   return `${getApiOrigin()}/api/auth`;
 }
+
+const AUTH_NETWORK_HINT =
+  'Cannot reach the login API from this device. In Vercel, set EXPO_PUBLIC_API_URL to your HTTPS API URL and redeploy.';
 
 function normalizeTokenResponse(data) {
   return {
@@ -47,11 +51,11 @@ async function parseAuthError(res) {
 }
 
 export async function sendAdminOtp(email) {
-  const res = await fetch(`${authBase()}/admin/send-otp`, {
+  const res = await fetchWithNetworkHint(`${authBase()}/admin/send-otp`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: email.trim().toLowerCase() }),
-  });
+  }, AUTH_NETWORK_HINT);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body?.error || 'Could not send OTP');
   return {
@@ -61,7 +65,7 @@ export async function sendAdminOtp(email) {
 }
 
 export async function verifyAdminOtp(email, otp, displayName) {
-  const res = await fetch(`${authBase()}/admin/verify-otp`, {
+  const res = await fetchWithNetworkHint(`${authBase()}/admin/verify-otp`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -69,7 +73,7 @@ export async function verifyAdminOtp(email, otp, displayName) {
       otp: otp.trim(),
       displayName: displayName?.trim() || null,
     }),
-  });
+  }, AUTH_NETWORK_HINT);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body?.error || 'OTP verification failed');
 
@@ -85,11 +89,11 @@ export async function verifyAdminOtp(email, otp, displayName) {
 }
 
 export async function loginWithCredentials(username, password) {
-  const res = await fetch(`${authBase()}/login`, {
+  const res = await fetchWithNetworkHint(`${authBase()}/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username: username.trim(), password }),
-  });
+  }, AUTH_NETWORK_HINT);
   if (!res.ok) throw new Error(await parseAuthError(res));
   const data = normalizeTokenResponse(await res.json());
   if (!data.accessToken || !data.refreshToken) {
@@ -102,11 +106,11 @@ export async function loginWithCredentials(username, password) {
 }
 
 export async function refreshSession(refreshToken) {
-  const res = await fetch(`${authBase()}/refresh`, {
+  const res = await fetchWithNetworkHint(`${authBase()}/refresh`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ refreshToken }),
-  });
+  }, AUTH_NETWORK_HINT);
   if (!res.ok) throw new Error(await parseAuthError(res));
   const data = normalizeTokenResponse(await res.json());
   const prev = await loadStoredSession();

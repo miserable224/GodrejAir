@@ -12,6 +12,7 @@
 
 import { Platform } from 'react-native';
 import { getApiOrigin, resolveApiOrigin } from '../config/apiConfig';
+import { fetchWithNetworkHint } from '../utils/networkError';
 import { ensureValidAccessToken, forceRefreshAccessToken } from './authService';
 
 // ─── Config ────────────────────────────────────────────────────────────────
@@ -23,18 +24,8 @@ function apiBase() {
   return `${getApiOrigin()}/api`;
 }
 
-async function fetchWithNetworkHint(url, options) {
-  try {
-    return await fetch(url, options);
-  } catch (err) {
-    const msg = err?.message || '';
-    if (err?.name === 'TypeError' && /fetch|network|failed/i.test(msg)) {
-      throw new Error(
-        `Cannot reach API at ${getApiOrigin()}. Ensure EXPO_PUBLIC_API_URL is set in Vercel to your live HTTPS API and redeploy.`,
-      );
-    }
-    throw err;
-  }
+function apiNetworkHint() {
+  return `Cannot reach API at ${resolveApiOrigin() ?? 'unknown'}. Set EXPO_PUBLIC_API_URL in Vercel (HTTPS) and redeploy.`;
 }
 
 // ─── Cache ─────────────────────────────────────────────────────────────────
@@ -80,7 +71,7 @@ async function apiFetch(path, token, signal, retried = false) {
   const res = await fetchWithNetworkHint(`${apiBase()}${path}`, {
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     signal,
-  });
+  }, apiNetworkHint());
 
   if ((res.status === 401 || res.status === 403) && !retried) {
     const refreshed = await forceRefreshAccessToken();
@@ -303,7 +294,7 @@ export async function uploadSecurityPhoto(token, photo, signal) {
     headers: { Authorization: `Bearer ${accessToken}` },
     body: formData,
     signal,
-  });
+  }, apiNetworkHint());
 
   if (!res.ok) {
     throw new Error(`Photo upload failed (${res.status}): ${await readApiError(res)}`);
@@ -322,7 +313,7 @@ export async function postDailyAttendance(token, payload, signal) {
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
     signal,
-  });
+  }, apiNetworkHint());
   if (!res.ok) {
     throw new Error(`Failed to save attendance (${res.status}): ${await readApiError(res)}`);
   }
@@ -369,7 +360,7 @@ export async function postMobilePatrol(token, payload, signal) {
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     signal,
-  });
+  }, apiNetworkHint());
 
   if (!res.ok) {
     throw new Error(`Failed to save patrol (${res.status}): ${await readApiError(res)}`);
@@ -385,7 +376,7 @@ export async function postStaffMember(token, payload, signal) {
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
     signal,
-  });
+  }, apiNetworkHint());
   if (!res.ok) {
     let detail = res.statusText;
     try { detail = (await res.json())?.message || detail; } catch { /* ignore */ }
