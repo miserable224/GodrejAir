@@ -1,29 +1,59 @@
 {
   "expo": {
-    "name": "GodrejAir",
-    "slug": "GodrejAir",
+    "name": "Godrej Air",
+    "slug": "godrejair",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
+    "platforms": ["ios", "android", "web"],
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#1A1F5E"
     },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro",
+      "name": "Godrej Air – Society Management",
+      "themeColor": "#1A1F5E"
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow access to photos for security duty records.",
+          "cameraPermission": "Allow camera for security duty photos."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Godrej Air to tag security duty records with your current location."
+        }
+      ]
+    ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.godrejair.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Take photos for security duty records.",
+        "NSPhotoLibraryUsageDescription": "Attach photos to security duty records.",
+        "NSLocationWhenInUseUsageDescription": "Tag security duty records with your current location."
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#1A1F5E"
       },
-      "edgeToEdgeEnabled": true
-    },
-    "web": {
-      "favicon": "./assets/favicon.png"
+      "package": "com.godrejair.app",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "CAMERA",
+        "READ_MEDIA_IMAGES"
+      ]
     }
   }
 }
