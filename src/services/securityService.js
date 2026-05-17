@@ -250,16 +250,27 @@ function photoFilePart(photo) {
 }
 
 async function appendPhotoToFormData(formData, photo) {
-  const uri = photo?.uri;
-  if (!uri) throw new Error('Photo URI is required');
-
   if (Platform.OS === 'web') {
-    const name = photoFileName(uri);
-    const response = await fetch(uri);
-    if (!response.ok) {
-      throw new Error('Could not read the selected photo. Try Gallery instead of Camera.');
+    if (photo?.file instanceof File) {
+      const name = photo.file.name || 'photo.jpg';
+      formData.append('file', photo.file, name);
+      return;
     }
-    const blob = await response.blob();
+    const uri = photo?.uri;
+    if (!uri) throw new Error('Photo URI is required');
+    const name = photoFileName(uri);
+    let blob;
+    try {
+      const response = await fetch(uri);
+      if (!response.ok) {
+        throw new Error('Could not read the selected photo. Use Gallery and try again.');
+      }
+      blob = await response.blob();
+    } catch {
+      throw new Error(
+        'Could not read the photo on this device. Use Gallery (not Camera) and ensure location permission is allowed or denied — do not leave the prompt open.',
+      );
+    }
     const type = blob.type || photoMimeType(name);
     const file =
       typeof File !== 'undefined'
@@ -268,6 +279,9 @@ async function appendPhotoToFormData(formData, photo) {
     formData.append('file', file, name);
     return;
   }
+
+  const uri = photo?.uri;
+  if (!uri) throw new Error('Photo URI is required');
 
   const part = photoFilePart(photo);
   if (!part) throw new Error('Photo URI is required');

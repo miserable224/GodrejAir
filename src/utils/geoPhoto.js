@@ -2,7 +2,47 @@ import { Alert, Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 
+const GEO_TIMEOUT_MS = 6000;
+
+function getWebGeolocation() {
+  return new Promise((resolve) => {
+    const geo = typeof navigator !== 'undefined' ? navigator.geolocation : null;
+    if (!geo) {
+      resolve(null);
+      return;
+    }
+    if (typeof globalThis !== 'undefined' && globalThis.isSecureContext === false) {
+      resolve(null);
+      return;
+    }
+    const timer = setTimeout(() => resolve(null), GEO_TIMEOUT_MS);
+    geo.getCurrentPosition(
+      (pos) => {
+        clearTimeout(timer);
+        resolve({
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          accuracy: pos.coords.accuracy ?? null,
+          capturedAt: new Date().toISOString(),
+        });
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(null);
+      },
+      {
+        enableHighAccuracy: false,
+        maximumAge: 120000,
+        timeout: GEO_TIMEOUT_MS,
+      },
+    );
+  });
+}
+
 export async function getCurrentGeoPosition() {
+  if (Platform.OS === 'web') {
+    return getWebGeolocation();
+  }
   try {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return null;
@@ -29,17 +69,39 @@ export function formatGeoCaption(geo) {
   return `GPS: ${la.toFixed(5)}° ${ns}, ${lo.toFixed(5)}° ${ew}`;
 }
 
-/** @param {string} uri @param {object|null} geo */
-export function buildGeoTaggedPhoto(uri, geo) {
-  if (!uri) return null;
-  if (!geo) return { uri, capturedAt: new Date().toISOString() };
+/** @param {string} uri @param {object|null} geo @param {File|undefined} file */
+export function buildGeoTaggedPhoto(uri, geo, file) {
+  if (!uri && !file) return null;
+  let displayUri = uri;
+  if (Platform.OS === 'web' && file && typeof URL !== 'undefined' && URL.createObjectURL) {
+    displayUri = URL.createObjectURL(file);
+  }
+  const base = {
+    uri: displayUri,
+    file: file || undefined,
+    capturedAt: new Date().toISOString(),
+  };
+  if (!geo) return base;
   return {
-    uri,
+    ...base,
     latitude: geo.latitude,
     longitude: geo.longitude,
     accuracy: geo.accuracy,
-    capturedAt: geo.capturedAt || new Date().toISOString(),
+    capturedAt: geo.capturedAt || base.capturedAt,
   };
+}
+
+function photoFromPickerAsset(asset) {
+  if (!asset) return null;
+  const uri = asset.uri;
+  const file = asset.file;
+  if (!uri && !file) return null;
+  return { uri, file };
+}
+
+async function attachGeo(photoBase) {
+  const geo = await getCurrentGeoPosition();
+  return buildGeoTaggedPhoto(photoBase.uri, geo, photoBase.file);
 }
 
 export async function pickGeoPhotoFromLibrary() {
@@ -53,35 +115,36 @@ export async function pickGeoPhotoFromLibrary() {
     quality: 0.85,
   });
   if (result.canceled) return null;
-  const uri = result.assets?.[0]?.uri;
-  if (!uri) return null;
-  const geo = await getCurrentGeoPosition();
-  return buildGeoTaggedPhoto(uri, geo);
+  const photoBase = photoFromPickerAsset(result.assets?.[0]);
+  if (!photoBase) return null;
+  return attachGeo(photoBase);
 }
 
 export async function pickGeoPhotoFromCamera() {
+  if (Platform.OS === 'web') {
+    Alert.alert(
+      'Camera on mobile browser',
+      'Many phones block the camera in the browser. Use Gallery to pick a photo, or use Expo Go on your phone.',
+    );
+    return pickGeoPhotoFromLibrary();
+  }
   const camPerm = await ImagePicker.requestCameraPermissionsAsync();
   if (!camPerm.granted) {
     Alert.alert('Permission needed', 'Allow camera access to take a photo.');
     return null;
   }
-  const pickOptions = { quality: 0.85, mediaTypes: ['images'] };
   let result;
   try {
-    result = await ImagePicker.launchCameraAsync(pickOptions);
-  } catch (launchErr) {
-    if (Platform.OS === 'web') {
-      Alert.alert(
-        'Camera',
-        'Browsers often cannot use the device camera from this screen. Use Gallery to attach a photo, or use the app on a phone (Expo Go or a dev build).',
-      );
-      return null;
-    }
-    throw launchErr;
+    result = await ImagePicker.launchCameraAsync({
+      quality: 0.85,
+      mediaTypes: ['images'],
+    });
+  } catch {
+    Alert.alert('Camera unavailable', 'Use Gallery to attach a photo instead.');
+    return null;
   }
   if (result.canceled) return null;
-  const uri = result.assets?.[0]?.uri;
-  if (!uri) return null;
-  const geo = await getCurrentGeoPosition();
-  return buildGeoTaggedPhoto(uri, geo);
+  const photoBase = photoFromPickerAsset(result.assets?.[0]);
+  if (!photoBase) return null;
+  return attachGeo(photoBase);
 }
