@@ -69,6 +69,14 @@ export function formatGeoCaption(geo) {
   return `GPS: ${la.toFixed(5)}° ${ns}, ${lo.toFixed(5)}° ${ew}`;
 }
 
+/** Location label for deployment APIs when UI has no manual location field. */
+export function locationLabelFromPhoto(photo) {
+  if (photo?.latitude != null && photo?.longitude != null) {
+    return formatGeoCaption(photo);
+  }
+  return 'On-site';
+}
+
 /** @param {string} uri @param {object|null} geo @param {File|undefined} file */
 export function buildGeoTaggedPhoto(uri, geo, file) {
   if (!uri && !file) return null;

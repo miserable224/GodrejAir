@@ -39,7 +39,7 @@ import { COLORS, SIZES, SHADOWS, DARK } from '../../constants/theme';
 import AmbientBackground from '../../components/AmbientBackground';
 import BrandWordmark from '../../components/BrandWordmark';
 import SecurityFormModal, { SecSaveButton } from '../../components/SecurityFormModal';
-import HousekeepingAttendanceForm from '../../components/HousekeepingAttendanceForm';
+import HousekeepingDeploymentForm from '../../components/HousekeepingDeploymentForm';
 import RentalsModulePanel from '../../components/RentalsModulePanel';
 import {
   RentalsShopForm,
@@ -60,12 +60,13 @@ import AttendanceRoleRow from '../../components/AttendanceRoleRow';
 import ModulePhotoSection from '../../components/ModulePhotoSection';
 import {
   formatGeoCaption,
+  locationLabelFromPhoto,
   pickGeoPhotoFromCamera,
   pickGeoPhotoFromLibrary,
 } from '../../utils/geoPhoto';
 import { WaterRecordForm, WaterVendorForm } from '../../components/WaterRecordForm';
 import { HK, WATER } from '../../constants/moduleThemes';
-import { ensureValidAccessToken } from '../../services/authService';
+import { ensureValidAccessToken } from '../../modules/shared';
 import {
   ADMIN_RENTALS_CATEGORY_PROGRESS,
   ADMIN_COLLECTIONS_VS_EXPECTED,
@@ -82,14 +83,22 @@ import {
   filterDashboardSections,
 } from '../../constants/roles';
 import { BRAND_LOGO } from '../../constants/branding';
-import { apiService } from '../../services/apiService';
+import { apiService } from '../../modules/shared';
 import {
-  postDailyAttendance,
-  postDailyAttendanceWithDeployment,
+  postBulkSecurityDeployments,
   postMobilePatrol,
   postStaffMember,
-} from '../../services/securityService';
-import { useSecurityData } from '../../hooks/useSecurityData';
+  useSecurityData,
+  useDeploymentQueue,
+  applyDeploymentEntriesToCounts,
+  normalizeRoleKey,
+} from '../../modules/security';
+import {
+  mergeHkDeploymentOverlay,
+  useHousekeepingData,
+  invalidateHousekeepingCache,
+  postBulkHousekeepingDeployments,
+} from '../../modules/housekeeping';
 import { SEC, SEC_FONTS, SEC_PLACEHOLDER } from '../../constants/securityTheme';
 
 const RENTALS_SUBTITLE = `${ADMIN_COLLECTIONS_VS_EXPECTED.received} vs billed targets · ${ADMIN_COLLECTIONS_VS_EXPECTED.periodLabel}`;
@@ -225,16 +234,6 @@ function endOfWeekSunday(fromMonday) {
 
 function shortenDateLabel(d) {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
-}
-
-/** Normalize role labels for matching deployment rows to vendor rate cards. */
-function normalizeRoleKey(s) {
-  return String(s || '')
-    .trim()
-    .split(/[\s_/]+/)
-    .filter(Boolean)
-    .join(' ')
-    .toUpperCase();
 }
 
 function rateCardRole(rate) {
@@ -457,7 +456,7 @@ function FloatingModuleCard({ section, index, expanded, onPress, isLast, childre
           section.featured && styles.moduleRowFeatured,
           expanded && styles.moduleRowExpanded,
           expanded && section.id === 'Security' && styles.moduleRowSecurityExpanded,
-          expanded && section.id === 'Workforce' && styles.moduleRowHkExpanded,
+          expanded && section.id === 'Workforce' && styles.moduleRowSecurityExpanded,
           expanded && section.id === 'rentals' && styles.moduleRowRentalsExpanded,
           expanded && section.id === 'amc' && styles.moduleRowAmcExpanded,
           expanded && section.id === 'WaterTracking' && styles.moduleRowOpsExpanded,
@@ -580,6 +579,9 @@ export default function AdminDashboardScreen({ navigation }) {
   const [securityDateRange, setSecurityDateRange] = useState('Today');
   const [showSecurityDateMenu, setShowSecurityDateMenu] = useState(false);
   const [showHkDateMenu, setShowHkDateMenu] = useState(false);
+  /** Housekeeping date filter (Today / week / month / custom). */
+  const [staffTimePreset, setStaffTimePreset] = useState('today');
+  const [staffDateRange, setStaffDateRange] = useState({ from: '', to: '' });
   const [customRange, setCustomRange] = useState({ from: '', to: '' });
   const {
     staffCounts: securityStaffCounts,
@@ -588,8 +590,10 @@ export default function AdminDashboardScreen({ navigation }) {
     sanctionedStrength,
     setSanctionedStrength,
     securityBilling,
+    securityDashboard,
     staffRoster,
     isLoading: isStaffLoading,
+    fetchErrors,
     periodLabel: securityPeriodLabel,
     refresh: refreshSecurityData,
   } = useSecurityData({
@@ -606,15 +610,34 @@ export default function AdminDashboardScreen({ navigation }) {
     if (!stillVisible) setExpandedId(null);
   }, [expandedId, visibleDashboardSections]);
 
-  const [recordTotalDeploymentOpen, setRecordTotalDeploymentOpen] = useState(false);
-  const [recordIndividualDeploymentOpen, setRecordIndividualDeploymentOpen] = useState(false);
-  const [recordHousekeepingOpen, setRecordHousekeepingOpen] = useState(false);
-  const [hkAttendanceData, setHkAttendanceData] = useState({});
-  const [hkAttendancePhoto, setHkAttendancePhoto] = useState(null);
-  const [deploymentAttendancePhoto, setDeploymentAttendancePhoto] = useState(null);
+  const [recordAddSecurityOpen, setRecordAddSecurityOpen] = useState(false);
+  const {
+    entries: pendingSecurityEntries,
+    addEntry: addPendingSecurityEntry,
+    removeEntry: removePendingSecurityEntry,
+    clearEntries: clearPendingSecurityEntries,
+    count: pendingSecurityCount,
+  } = useDeploymentQueue();
+  /** Saved today via Add Security — keeps role list in sync until API refresh includes logs. */
+  const [committedSecurityEntries, setCommittedSecurityEntries] = useState([]);
+
+  const {
+    entries: pendingHkEntries,
+    addEntry: addPendingHkEntry,
+    removeEntry: removePendingHkEntry,
+    clearEntries: clearPendingHkEntries,
+    count: pendingHkCount,
+  } = useDeploymentQueue();
+  const [committedHkEntries, setCommittedHkEntries] = useState([]);
+  const [recordAddHkOpen, setRecordAddHkOpen] = useState(false);
+  const [hkDeploymentForm, setHkDeploymentForm] = useState({
+    designation: '',
+    name: '',
+  });
+  const [hkDeploymentPhoto, setHkDeploymentPhoto] = useState(null);
+  const [hkPickerOpen, setHkPickerOpen] = useState(null);
   const [isSavingHousekeeping, setIsSavingHousekeeping] = useState(false);
   const [recordStaffType, setRecordStaffType] = useState('Security');
-  const [staffAttendanceData, setStaffAttendanceData] = useState({}); // { "Role_Shift": count }
   const [isSavingAttendance, setIsSavingAttendance] = useState(false);
   const [isSavingPatrol, setIsSavingPatrol] = useState(false);
   const [addStaffOpen, setAddStaffOpen] = useState(false);
@@ -642,6 +665,7 @@ export default function AdminDashboardScreen({ navigation }) {
     notes: '',
     photos: [],
   });
+  const [patrolPickerOpen, setPatrolPickerOpen] = useState(false);
   const [trainerForm, setTrainerForm] = useState({
     trainerName: '',
     serviceType: '',
@@ -727,14 +751,41 @@ export default function AdminDashboardScreen({ navigation }) {
   // staffCounts comes from useSecurityData hook (see above)
   const staffCounts = securityStaffCounts;
   const setStaffCounts = setSecurityStaffCounts;
-  const fmHkRoles = useMemo(
-    () => staffCounts.filter((c) => c.category === 'FM_HK'),
-    [staffCounts],
+  const hkDesignationOptions = useMemo(
+    () =>
+      ADMIN_MANPOWER_DEPLOYMENT.filter((row) => row.category === 'FM_HK').map((row) => row.role),
+    [],
   );
+
+  const securityRoleDisplayRows = useMemo(() => {
+    const overlay = [...committedSecurityEntries, ...pendingSecurityEntries];
+    return applyDeploymentEntriesToCounts(staffCounts, overlay, 'Security').filter(
+      (c) => c.category === 'Security',
+    );
+  }, [staffCounts, committedSecurityEntries, pendingSecurityEntries]);
+
+  const {
+    dashboard: hkDashboard,
+    roleRows: hkApiRoleRows,
+    periodLabel: hkPeriodLabel,
+    isLoading: isHkLoading,
+    error: hkFetchError,
+    refresh: refreshHkData,
+  } = useHousekeepingData({
+    token,
+    staffTimePreset,
+    staffDateRange,
+    enabled: expandedId === 'Workforce' && (permissions?.canSeeModule('Workforce') ?? true),
+  });
+
+  const hkRoleDisplayRows = useMemo(() => {
+    const overlay = [...committedHkEntries, ...pendingHkEntries];
+    if (overlay.length) return mergeHkDeploymentOverlay(hkApiRoleRows, overlay);
+    return hkApiRoleRows;
+  }, [hkApiRoleRows, committedHkEntries, pendingHkEntries]);
   const [activeShift, setActiveShift] = useState(1); // 1 or 2
   const [fmHkExpanded, setFmHkExpanded] = useState(false);
   const [securityExpanded, setSecurityExpanded] = useState(false);
-  const [staffPenaltyCount, setStaffPenaltyCount] = useState(2);
   const [staffAttendancePhoto, setStaffAttendancePhoto] = useState(null);
   const [deploymentForm, setDeploymentForm] = useState({
     designation: '',
@@ -761,6 +812,14 @@ export default function AdminDashboardScreen({ navigation }) {
     return DEPLOYMENT_STAFF_FALLBACK_NAMES;
   }, [deploymentStaffNames]);
 
+  /** Staff deployed today via Add Security (saved + queued) — patrolling picker only. */
+  const patrolStaffNameOptions = useMemo(() => {
+    const names = [...committedSecurityEntries, ...pendingSecurityEntries]
+      .map((e) => e.staffName?.trim())
+      .filter(Boolean);
+    return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
+  }, [committedSecurityEntries, pendingSecurityEntries]);
+
   const deploymentPickerOptions = useMemo(() => {
     if (deploymentPickerOpen === 'designation') return designationOptions;
     if (deploymentPickerOpen === 'location') return DEPLOYMENT_LOCATION_OPTIONS;
@@ -768,9 +827,22 @@ export default function AdminDashboardScreen({ navigation }) {
     return [];
   }, [deploymentPickerOpen, designationOptions, staffNameOptions]);
 
-  /** Workforce list filter: scoped view derived from mock history when not Today. */
-  const [staffTimePreset, setStaffTimePreset] = useState('today');
-  const [staffDateRange, setStaffDateRange] = useState({ from: '', to: '' });
+  const hkPickerOptions = useMemo(() => {
+    if (hkPickerOpen === 'designation') return hkDesignationOptions;
+    if (hkPickerOpen === 'name') return staffNameOptions;
+    return [];
+  }, [hkPickerOpen, hkDesignationOptions, staffNameOptions]);
+
+  const activePickerField = recordAddHkOpen
+    ? hkPickerOpen
+    : recordPatrolOpen && patrolPickerOpen
+      ? 'staff'
+      : deploymentPickerOpen;
+  const activePickerOptions = recordAddHkOpen
+    ? hkPickerOptions
+    : recordPatrolOpen && patrolPickerOpen
+      ? patrolStaffNameOptions
+      : deploymentPickerOptions;
 
   // Mock history for 5 days
   const [attendanceHistory, setAttendanceHistory] = useState([
@@ -1304,24 +1376,37 @@ export default function AdminDashboardScreen({ navigation }) {
     }
   };
 
+  const resolvePatrolStaffName = (selectedName) => {
+    const needle = selectedName.trim().toLowerCase();
+    if (!needle) return '';
+    const rosterMatch = (staffRoster || []).find(
+      (s) => s.name?.trim().toLowerCase() === needle,
+    );
+    return rosterMatch?.name?.trim() || selectedName.trim();
+  };
+
+  const hasPatrolPhoto = (photo) => Boolean(photo?.uri || photo?.file);
+
   const savePatrol = async () => {
-    const staffName = patrolForm.staffId?.trim();
+    const staffName = resolvePatrolStaffName(patrolForm.staffId || '');
     if (!staffName) {
-      Alert.alert('Staff required', 'Enter the patrolling staff name or ID.');
+      Alert.alert('Staff required', 'Select a security guard deployed via Add Security.');
       return;
     }
-    if (!patrolForm.photos?.length || !patrolForm.photos[0]?.uri) {
+    const ph = patrolForm.photos?.[0];
+    if (!hasPatrolPhoto(ph)) {
       Alert.alert('Photo required', 'Capture a patrol photo with the camera or gallery.');
       return;
     }
-    const ph = patrolForm.photos[0];
+
+    const accessToken = (await ensureValidAccessToken()) || token;
+    if (!accessToken) {
+      Alert.alert('Not signed in', 'Please sign in again to save patrol logs.');
+      return;
+    }
+
+    setIsSavingPatrol(true);
     try {
-      setIsSavingPatrol(true);
-      const accessToken = (await ensureValidAccessToken()) || token;
-      if (!accessToken) {
-        Alert.alert('Not signed in', 'Please sign in again to save patrol logs.');
-        return;
-      }
       await postMobilePatrol(accessToken, {
         staffName,
         locationName: patrolForm.locationId?.trim() || null,
@@ -1333,6 +1418,7 @@ export default function AdminDashboardScreen({ navigation }) {
       });
       Alert.alert('Success', 'Patrol log saved with photo.');
       setRecordPatrolOpen(false);
+      setPatrolPickerOpen(false);
       setPatrolForm({ staffId: '', locationId: '', notes: '', photos: [] });
       refreshSecurityData();
     } catch (err) {
@@ -1469,52 +1555,53 @@ export default function AdminDashboardScreen({ navigation }) {
   ];
 
   const renderWorkforceDetails = () => {
-    const { displayCounts: wc, periodLabel } = workforceFiltered;
-    const fmHkStaff = wc.filter((c) => c.category === 'FM_HK');
+    const fmHkStaff = hkRoleDisplayRows;
+    const hkOverlay = [...committedHkEntries, ...pendingHkEntries];
 
-    const fmHkS1 = fmHkStaff.reduce((s, c) => s + c.actualS1, 0);
-    const fmHkS2 = fmHkStaff.reduce((s, c) => s + c.actualS2, 0);
-    const fmHkExp = fmHkStaff.reduce((s, c) => s + c.expected, 0);
+    const dailyTotal =
+      hkDashboard?.totalDeployed ??
+      fmHkStaff.reduce((s, c) => s + c.actualS1 + c.actualS2, 0);
+    const dailyExpected =
+      hkDashboard?.totalRequired ??
+      fmHkStaff.reduce((s, c) => s + c.expected * 2, 0);
+    const dailyShortage =
+      hkDashboard?.totalShortage ?? Math.max(0, dailyExpected - dailyTotal);
+    const headcountOk = dailyShortage === 0 && dailyExpected > 0;
 
-    const s1Ok = fmHkExp > 0 && fmHkS1 >= fmHkExp;
-    const s2Ok = fmHkExp > 0 && fmHkS2 >= fmHkExp;
-    const headcountOk = s1Ok && s2Ok;
-    const s1Pct = fmHkExp > 0 ? Math.round((fmHkS1 / fmHkExp) * 100) : 0;
-    const s2Pct = fmHkExp > 0 ? Math.round((fmHkS2 / fmHkExp) * 100) : 0;
+    const wages = Number(hkDashboard?.estimatedWages ?? 0);
+    const hkBillHeadline = wages > 0 ? formatINR(wages) : '---';
+
     const hkDateLabel =
       HK_DATE_PRESETS.find((o) => o.key === staffTimePreset)?.label ?? 'Today';
 
     return (
-      <View style={styles.hkExpandedShell}>
-        <View style={styles.premiumHkCard}>
+      <View style={styles.securityExpandedShell}>
+        <View style={styles.premiumSecurityCard}>
           <LinearGradient
-            colors={HK.headerGradient}
+            colors={SEC.headerGradient}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
-            style={styles.hkPremiumHeader}
+            style={styles.securityPremiumHeader}
           >
-            <View style={styles.hkHeaderContent}>
-              <View style={styles.hkHeaderLeft}>
-                <Text style={styles.hkPremiumTitle}>Housekeeping</Text>
-                <Text style={styles.hkPremiumSub} numberOfLines={1}>
-                  {periodLabel}
-                </Text>
+            <View style={styles.securityHeaderContent}>
+              <View style={styles.securityHeaderLeft}>
+                <Text style={styles.securityPremiumTitle}>Housekeeping</Text>
               </View>
-              <View style={styles.hkHeaderRight}>
+              <View style={styles.securityHeaderRight}>
                 <TouchableOpacity
                   style={[
-                    styles.hkPremiumDropdown,
-                    showHkDateMenu && styles.hkPremiumDropdownActive,
+                    styles.securityPremiumDropdown,
+                    showHkDateMenu && styles.securityPremiumDropdownActive,
                   ]}
                   onPress={() => setShowHkDateMenu(!showHkDateMenu)}
                   activeOpacity={0.7}
                 >
-                  <Ionicons name="calendar-outline" size={15} color={HK.gold} />
-                  <Text style={styles.hkPremiumDateText}>{hkDateLabel}</Text>
+                  <Ionicons name="calendar-outline" size={15} color={SEC.gold} />
+                  <Text style={styles.securityPremiumDateText}>{hkDateLabel}</Text>
                   <Ionicons
                     name={showHkDateMenu ? 'chevron-up' : 'chevron-down'}
                     size={14}
-                    color={HK.textMuted}
+                    color={SEC.textMuted}
                   />
                 </TouchableOpacity>
               </View>
@@ -1522,27 +1609,19 @@ export default function AdminDashboardScreen({ navigation }) {
           </LinearGradient>
 
           {showHkDateMenu ? (
-            <View style={styles.hkPremiumDropdownMenu}>
+            <View style={styles.premiumDropdownMenu}>
               {HK_DATE_PRESETS.map(({ key, label }) => {
                 const active = staffTimePreset === key;
                 return (
                   <TouchableOpacity
                     key={key}
-                    style={[
-                      styles.hkPremiumDropdownOption,
-                      active && styles.hkPremiumDropdownOptionActive,
-                    ]}
+                    style={[styles.premiumDropdownOption, active && styles.premiumDropdownOptionActive]}
                     onPress={() => {
                       setStaffTimePreset(key);
                       setShowHkDateMenu(false);
                     }}
                   >
-                    <Text
-                      style={[
-                        styles.hkPremiumOptionText,
-                        active && styles.hkPremiumOptionTextActive,
-                      ]}
-                    >
+                    <Text style={[styles.premiumOptionText, active && styles.premiumOptionTextActive]}>
                       {label}
                     </Text>
                   </TouchableOpacity>
@@ -1551,137 +1630,129 @@ export default function AdminDashboardScreen({ navigation }) {
             </View>
           ) : null}
 
-          <View style={styles.hkBody}>
+          <View style={styles.securityBody}>
             {staffTimePreset === 'custom' ? (
               <View style={styles.premiumCustomRangeRow}>
                 <TextInput
-                  style={styles.hkPremiumRangeInput}
+                  style={styles.premiumRangeInput}
                   placeholder="From (DD/MM/YYYY)"
-                  placeholderTextColor={HK.textDim}
+                  placeholderTextColor={SEC.textDim}
                   value={staffDateRange.from}
                   onChangeText={(t) => setStaffDateRange((p) => ({ ...p, from: t }))}
                 />
                 <TextInput
-                  style={styles.hkPremiumRangeInput}
+                  style={styles.premiumRangeInput}
                   placeholder="To (DD/MM/YYYY)"
-                  placeholderTextColor={HK.textDim}
+                  placeholderTextColor={SEC.textDim}
                   value={staffDateRange.to}
                   onChangeText={(t) => setStaffDateRange((p) => ({ ...p, to: t }))}
                 />
               </View>
             ) : null}
 
-            <View style={styles.hkStatsGrid}>
-              <View style={styles.hkStatsTop}>
-                <View style={styles.hkStatsTitles}>
-                  <Text style={styles.hkStatsKicker}>Both shifts</Text>
-                  <Text style={styles.hkStatsPeriod} numberOfLines={2}>
-                    {periodLabel}
-                  </Text>
-                </View>
-                <View
-                  style={[
-                    styles.miniBadge,
-                    headcountOk ? styles.hkMiniBadgeSuccess : styles.hkMiniBadgeError,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.miniBadgeText,
-                      headcountOk ? styles.hkMiniBadgeTextSuccess : styles.hkMiniBadgeTextError,
-                    ]}
-                  >
-                    {headcountOk ? 'OK' : 'Short'}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={styles.hkDualTable}>
-                <View style={styles.hkDualHeaderRow}>
-                  <View style={styles.hkDualHeadSpacer} />
-                  <Text style={styles.hkDualHead}>S1</Text>
-                  <Text style={styles.hkDualHead}>S2</Text>
-                </View>
-                <View style={styles.hkDualDataRow}>
-                  <Text style={styles.hkDualRowLab}>Total HK</Text>
-                  <View style={styles.hkDualValCell}>
-                    <Text
-                      style={[
-                        styles.hkDualVal,
-                        s1Ok ? styles.hkValPositive : styles.hkValNegative,
-                      ]}
-                    >
-                      {fmHkS1}/{fmHkExp}
-                    </Text>
-                    <Text style={styles.hkDualPct}>{s1Pct}%</Text>
+            <View style={styles.securityStatsGrid}>
+              {isHkLoading ? (
+                <ActivityIndicator size="small" color={SEC.teal} style={styles.securityLoader} />
+              ) : (
+                <>
+                  <View style={styles.securityStatItem}>
+                    <View style={styles.securityStatValueRow}>
+                      <Text
+                        style={[
+                          styles.securityStatMainVal,
+                          headcountOk ? styles.securityValPositive : styles.securityValNegative,
+                        ]}
+                      >
+                        {dailyTotal}/{dailyExpected}
+                      </Text>
+                      <View
+                        style={[
+                          styles.miniBadge,
+                          headcountOk ? styles.miniBadgeSuccess : styles.miniBadgeError,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.miniBadgeText,
+                            headcountOk ? styles.miniBadgeTextSuccess : styles.miniBadgeTextError,
+                          ]}
+                        >
+                          {headcountOk ? 'OK' : dailyExpected > 0 ? `-${dailyShortage}` : '—'}
+                        </Text>
+                      </View>
+                    </View>
+                    {hkPeriodLabel ? (
+                      <Text style={styles.securityBillFootnote} numberOfLines={2}>
+                        {hkPeriodLabel}
+                      </Text>
+                    ) : null}
                   </View>
-                  <View style={styles.hkDualValCell}>
-                    <Text
-                      style={[
-                        styles.hkDualVal,
-                        s2Ok ? styles.hkValPositive : styles.hkValNegative,
-                      ]}
-                    >
-                      {fmHkS2}/{fmHkExp}
-                    </Text>
-                    <Text style={styles.hkDualPct}>{s2Pct}%</Text>
+                  <View style={styles.securityStatDivider} />
+                  <View style={styles.securityStatItem}>
+                    <View style={styles.securityStatValueRow}>
+                      <Text style={[styles.securityStatMainVal, styles.securityValBill]}>
+                        {hkBillHeadline}
+                      </Text>
+                    </View>
+                    <Text style={styles.securityBillFootnote}>Shift-based estimate</Text>
                   </View>
-                </View>
-              </View>
-
-              {staffPenaltyCount >= 2 ? (
-                <View style={styles.hkPenaltyStrip}>
-                  <Ionicons name="warning-outline" size={14} color={HK.gold} />
-                  <Text style={styles.hkPenaltyStripText} numberOfLines={2}>
-                    {staffPenaltyCount === 2
-                      ? '1 more leave → ₹1000 penalty.'
-                      : 'Penalty: ₹1000 per extra leave.'}
-                  </Text>
-                </View>
-              ) : null}
+                </>
+              )}
             </View>
+            {hkFetchError && !isHkLoading ? (
+              <Text style={styles.securityEmptyRoles}>{hkFetchError}</Text>
+            ) : null}
 
             <View style={styles.hubActionRow}>
               <TouchableOpacity
-                style={[styles.hubBtn, styles.hubBtnHk]}
-                onPress={() => setRecordHousekeepingOpen(true)}
+                style={[styles.hubBtn, styles.hubBtnIndividual]}
+                onPress={() => setRecordAddHkOpen(true)}
                 activeOpacity={0.85}
               >
-                <Ionicons name="sparkles-outline" size={16} color={HK.saveOnAccent} />
-                <Text style={styles.hubBtnHkText}>Record attendance</Text>
+                <Ionicons name="sparkles-outline" size={16} color={SEC.teal} />
+                <Text style={styles.hubBtnTextPatrol}>Add Housekeeping</Text>
               </TouchableOpacity>
             </View>
 
             <View style={styles.premiumRolesList}>
               {fmHkStaff.length === 0 ? (
-                <Text style={styles.hkEmptyRoles}>No housekeeping roles for this period.</Text>
+                <Text style={styles.securityEmptyRoles}>No housekeeping contract roles configured.</Text>
               ) : null}
               {fmHkStaff.map((item) => {
                 const s1Short = item.actualS1 < item.expected;
                 const s2Short = item.actualS2 < item.expected;
                 const roleOk = !s1Short && !s2Short;
+                const queuedForRole = hkOverlay.filter(
+                  (e) => normalizeRoleKey(e.designation) === normalizeRoleKey(item.role),
+                ).length;
                 return (
-                  <View key={item.id} style={styles.hkPremiumRoleRow}>
-                    <Text style={styles.hkRoleName} numberOfLines={1}>
+                  <View
+                    key={item.id}
+                    style={[styles.premiumRoleRow, queuedForRole > 0 && styles.premiumRoleRowQueued]}
+                  >
+                    <Text style={styles.roleNameCompact} numberOfLines={1}>
                       {item.role}
+                      {queuedForRole > 0 ? (
+                        <Text style={styles.roleQueuedBadge}> +{queuedForRole}</Text>
+                      ) : null}
                     </Text>
                     <View style={styles.roleCountGroup}>
-                      <View style={[styles.hkShiftPill, s1Short && styles.hkShiftPillWarn]}>
-                        <Text style={styles.hkShiftPillLabel}>S1</Text>
-                        <Text style={[styles.hkShiftPillVal, s1Short && styles.hkShiftValError]}>
+                      <View style={[styles.shiftPill, s1Short && styles.shiftPillWarn]}>
+                        <Text style={styles.shiftPillLabel}>S1</Text>
+                        <Text style={[styles.shiftPillVal, s1Short && styles.shiftValError]}>
                           {item.actualS1}/{item.expected}
                         </Text>
                       </View>
-                      <View style={[styles.hkShiftPill, s2Short && styles.hkShiftPillWarn]}>
-                        <Text style={styles.hkShiftPillLabel}>S2</Text>
-                        <Text style={[styles.hkShiftPillVal, s2Short && styles.hkShiftValError]}>
+                      <View style={[styles.shiftPill, s2Short && styles.shiftPillWarn]}>
+                        <Text style={styles.shiftPillLabel}>S2</Text>
+                        <Text style={[styles.shiftPillVal, s2Short && styles.shiftValError]}>
                           {item.actualS2}/{item.expected}
                         </Text>
                       </View>
                       <View
                         style={[
                           styles.roleStatusDot,
-                          roleOk ? styles.hkRoleStatusOk : styles.hkRoleStatusWarn,
+                          roleOk ? styles.roleStatusOk : styles.roleStatusWarn,
                         ]}
                       />
                     </View>
@@ -1696,16 +1767,16 @@ export default function AdminDashboardScreen({ navigation }) {
   };
 
   const renderSecurityDetails = () => {
-    const { displayCounts: wc, periodLabel } = workforceFiltered;
-    const securityStaff = wc.filter((c) => c.category === 'Security');
-    
-    // Daily Stats
-    const securityS1 = securityStaff.reduce((s, c) => s + c.actualS1, 0);
-    const securityS2 = securityStaff.reduce((s, c) => s + c.actualS2, 0);
-    const securityExp = securityStaff.reduce((s, c) => s + c.expected, 0);
-    const dailyTotal = securityS1 + securityS2;
-    const dailyExpected = securityExp * 2;
-    const dailyShortage = Math.max(0, dailyExpected - dailyTotal);
+    const securityStaff = securityRoleDisplayRows;
+
+    const dailyTotal =
+      securityDashboard?.totalDeployed ??
+      securityStaff.reduce((s, c) => s + c.actualS1 + c.actualS2, 0);
+    const dailyExpected =
+      securityDashboard?.totalRequired ??
+      securityStaff.reduce((s, c) => s + c.expected * 2, 0);
+    const dailyShortage =
+      securityDashboard?.totalShortage ?? Math.max(0, dailyExpected - dailyTotal);
 
     const shiftBillEst = estimateSecurityBillFromShifts(
       securityStaff,
@@ -1718,9 +1789,18 @@ export default function AdminDashboardScreen({ navigation }) {
           String(securityBilling.message).includes('Could not load vendor contract'))
     );
     const apiGrand = Number(securityBilling?.grandTotal ?? securityBilling?.GrandTotal);
+    const periodWages = Number(securityDashboard?.estimatedWages ?? 0);
     const useOfficialBill =
-      !contractBillBroken && securityBilling != null && !Number.isNaN(apiGrand) && apiGrand > 0;
-    const displayBillAmount = useOfficialBill ? apiGrand : shiftBillEst.total;
+      securityDateRange === 'Last 1 Month' &&
+      !contractBillBroken &&
+      securityBilling != null &&
+      !Number.isNaN(apiGrand) &&
+      apiGrand > 0;
+    const displayBillAmount = useOfficialBill
+      ? apiGrand
+      : periodWages > 0
+        ? periodWages
+        : shiftBillEst.total;
     const billHeadline = displayBillAmount > 0 ? formatINR(displayBillAmount) : '---';
     const billFootnoteHint =
       !useOfficialBill &&
@@ -1730,11 +1810,7 @@ export default function AdminDashboardScreen({ navigation }) {
         ? String(securityBilling.message).slice(0, 80)
         : null;
 
-    // Monthly Trends (Mocked for now)
-    const monthlyTrendPct = 89;
-    const monthlyShortages = 9;
-
-    const headcountOk = dailyShortage === 0;
+    const headcountOk = dailyShortage === 0 && dailyExpected > 0;
 
     return (
       <View style={styles.securityExpandedShell}>
@@ -1797,14 +1873,14 @@ export default function AdminDashboardScreen({ navigation }) {
               <View style={styles.premiumCustomRangeRow}>
                 <TextInput
                   style={styles.premiumRangeInput}
-                  placeholder="From (YYYY-MM-DD)"
+                  placeholder="From (DD/MM/YYYY)"
                   placeholderTextColor={SEC.textDim}
                   value={customRange.from}
                   onChangeText={(v) => setCustomRange((p) => ({ ...p, from: v }))}
                 />
                 <TextInput
                   style={styles.premiumRangeInput}
-                  placeholder="To (YYYY-MM-DD)"
+                  placeholder="To (DD/MM/YYYY)"
                   placeholderTextColor={SEC.textDim}
                   value={customRange.to}
                   onChangeText={(v) => setCustomRange((p) => ({ ...p, to: v }))}
@@ -1843,6 +1919,11 @@ export default function AdminDashboardScreen({ navigation }) {
                         </Text>
                       </View>
                     </View>
+                    {securityPeriodLabel ? (
+                      <Text style={styles.securityBillFootnote} numberOfLines={2}>
+                        {securityPeriodLabel}
+                      </Text>
+                    ) : null}
                   </View>
                   <View style={styles.securityStatDivider} />
                   <View style={styles.securityStatItem}>
@@ -1862,25 +1943,17 @@ export default function AdminDashboardScreen({ navigation }) {
                 </>
               )}
             </View>
+            {fetchErrors?.opsDashboard && !isStaffLoading ? (
+              <Text style={styles.securityEmptyRoles}>{fetchErrors.opsDashboard}</Text>
+            ) : null}
 
             <View style={styles.hubActionRow}>
               <TouchableOpacity
-                style={[styles.hubBtn, styles.hubBtnSecurity]}
-                onPress={() => {
-                  setRecordStaffType('Security');
-                  setRecordTotalDeploymentOpen(true);
-                }}
-              >
-                <Ionicons name="people-outline" size={16} color={SEC.bg} />
-                <Text style={styles.hubBtnText}>Total</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
                 style={[styles.hubBtn, styles.hubBtnIndividual]}
-                onPress={() => setRecordIndividualDeploymentOpen(true)}
+                onPress={() => setRecordAddSecurityOpen(true)}
               >
-                <Ionicons name="person-outline" size={16} color={SEC.teal} />
-                <Text style={styles.hubBtnTextPatrol}>Individual</Text>
+                <Ionicons name="shield-checkmark-outline" size={16} color={SEC.teal} />
+                <Text style={styles.hubBtnTextPatrol}>Add Security</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1888,7 +1961,7 @@ export default function AdminDashboardScreen({ navigation }) {
                 onPress={() => setRecordPatrolOpen(true)}
               >
                 <Ionicons name="walk-outline" size={16} color={SEC.teal} />
-                <Text style={styles.hubBtnTextPatrol}>Patrol</Text>
+                <Text style={styles.hubBtnTextPatrol}>Patrolling</Text>
               </TouchableOpacity>
             </View>
 
@@ -1900,10 +1973,19 @@ export default function AdminDashboardScreen({ navigation }) {
                 const s1Short = item.actualS1 < item.expected;
                 const s2Short = item.actualS2 < item.expected;
                 const roleOk = !s1Short && !s2Short;
+                const queuedForRole = [...committedSecurityEntries, ...pendingSecurityEntries].filter(
+                  (e) => normalizeRoleKey(e.designation) === normalizeRoleKey(item.role),
+                ).length;
                 return (
-                  <View key={item.id} style={styles.premiumRoleRow}>
+                  <View
+                    key={item.id}
+                    style={[styles.premiumRoleRow, queuedForRole > 0 && styles.premiumRoleRowQueued]}
+                  >
                     <Text style={styles.roleNameCompact} numberOfLines={1}>
                       {item.role}
+                      {queuedForRole > 0 ? (
+                        <Text style={styles.roleQueuedBadge}> +{queuedForRole}</Text>
+                      ) : null}
                     </Text>
                     <View style={styles.roleCountGroup}>
                       <View style={[styles.shiftPill, s1Short && styles.shiftPillWarn]}>
@@ -1935,24 +2017,13 @@ export default function AdminDashboardScreen({ navigation }) {
     );
   };
 
-  const closeTotalDeploymentModal = useCallback(() => {
-    setRecordTotalDeploymentOpen(false);
-  }, []);
-
-  const closeIndividualDeploymentModal = useCallback(() => {
+  const closeAddSecurityModal = useCallback(() => {
     setDeploymentPickerOpen(null);
-    setRecordIndividualDeploymentOpen(false);
-  }, []);
-
-  const pickStaffPhotoFromLibrary = async () => {
-    try {
-      const photo = await pickGeoPhotoFromLibrary();
-      if (photo) setStaffAttendancePhoto(photo);
-    } catch (err) {
-      console.log('Error picking from library:', err);
-      Alert.alert('Photos', err?.message || 'Could not open photo library.');
-    }
-  };
+    setRecordAddSecurityOpen(false);
+    clearPendingSecurityEntries();
+    setDeploymentForm({ designation: '', name: '', location: '' });
+    setStaffAttendancePhoto(null);
+  }, [clearPendingSecurityEntries]);
 
   const pickStaffPhotoFromCamera = async () => {
     try {
@@ -1965,146 +2036,201 @@ export default function AdminDashboardScreen({ navigation }) {
   };
 
   useEffect(() => {
-    if (!recordTotalDeploymentOpen) {
-      setStaffAttendanceData({});
-      setDeploymentAttendancePhoto(null);
-    }
-  }, [recordTotalDeploymentOpen]);
-
-  useEffect(() => {
-    if (!recordIndividualDeploymentOpen) {
+    if (!recordAddSecurityOpen) {
       setDeploymentForm({ designation: '', name: '', location: '' });
       setStaffAttendancePhoto(null);
       setDeploymentPickerOpen(null);
     }
-  }, [recordIndividualDeploymentOpen]);
+  }, [recordAddSecurityOpen]);
 
-  useEffect(() => {
-    if (!recordHousekeepingOpen) {
-      setHkAttendanceData({});
-      setHkAttendancePhoto(null);
-      return;
-    }
-    const init = {};
-    fmHkRoles.forEach((row) => {
-      init[`${row.role}||Shift1`] = String(row.actualS1 ?? '');
-      init[`${row.role}||Shift2`] = String(row.actualS2 ?? '');
-    });
-    setHkAttendanceData(init);
-  }, [recordHousekeepingOpen, fmHkRoles]);
+  const closeAddHkModal = useCallback(() => {
+    setHkPickerOpen(null);
+    setRecordAddHkOpen(false);
+    clearPendingHkEntries();
+    setHkDeploymentForm({ designation: '', name: '' });
+    setHkDeploymentPhoto(null);
+  }, [clearPendingHkEntries]);
 
-  const saveHousekeepingAttendance = () => {
-    const hasValue = Object.values(hkAttendanceData).some((v) => v !== '' && v != null);
-    if (!hasValue) {
-      Alert.alert('Enter counts', 'Enter headcount for at least one role and shift.');
-      return;
-    }
-    setIsSavingHousekeeping(true);
+  const pickHkPhotoFromCamera = async () => {
     try {
-      setStaffCounts((prev) =>
-        prev.map((item) => {
-          if (item.category !== 'FM_HK') return item;
-          const s1 = parseInt(hkAttendanceData[`${item.role}||Shift1`] || '0', 10) || 0;
-          const s2 = parseInt(hkAttendanceData[`${item.role}||Shift2`] || '0', 10) || 0;
-          return { ...item, actualS1: s1, actualS2: s2 };
-        }),
+      const photo = await pickGeoPhotoFromCamera();
+      if (photo) setHkDeploymentPhoto(photo);
+    } catch (err) {
+      Alert.alert('Camera', err?.message || 'Could not use camera.');
+    }
+  };
+
+  const buildDraftHkEntry = () => {
+    const designation = hkDeploymentForm.designation.trim();
+    const deployName = hkDeploymentForm.name.trim();
+    if (!designation || !deployName || !hkDeploymentPhoto?.uri) {
+      return null;
+    }
+    return {
+      designation,
+      staffName: deployName,
+      location: locationLabelFromPhoto(hkDeploymentPhoto),
+      photo: hkDeploymentPhoto,
+    };
+  };
+
+  const addHkToQueue = () => {
+    const draft = buildDraftHkEntry();
+    if (!draft) {
+      if (!hkDeploymentForm.designation.trim() || !hkDeploymentForm.name.trim()) {
+        Alert.alert('Missing details', 'Please select designation and staff name.');
+      } else {
+        Alert.alert('Photo required', 'Take a verification photo with the camera.');
+      }
+      return;
+    }
+    addPendingHkEntry(draft);
+    setHkDeploymentForm({ designation: '', name: '' });
+    setHkDeploymentPhoto(null);
+    setHkPickerOpen(null);
+  };
+
+  const collectHkItemsToSave = () => {
+    const items = pendingHkEntries.map((e) => ({
+      designation: e.designation,
+      staffName: e.staffName,
+      location: e.location || locationLabelFromPhoto(e.photo),
+      photo: e.photo,
+    }));
+    const draft = buildDraftHkEntry();
+    if (draft) items.push(draft);
+    return items;
+  };
+
+  const saveAllHkEntries = async () => {
+    const items = collectHkItemsToSave();
+    if (items.length === 0) {
+      Alert.alert('Nothing to save', 'Tap Add Housekeeping to queue at least one entry (with photo).');
+      return;
+    }
+
+    try {
+      setIsSavingHousekeeping(true);
+      const accessToken = (await ensureValidAccessToken()) || token;
+      if (!accessToken) {
+        Alert.alert('Not signed in', 'Please sign in again to save housekeeping logs.');
+        return;
+      }
+
+      const savedCount = await postBulkHousekeepingDeployments(
+        accessToken,
+        new Date().toISOString(),
+        items,
       );
-      Alert.alert('Success', 'Housekeeping attendance saved.');
-      setRecordHousekeepingOpen(false);
+
+      setCommittedHkEntries((prev) => [
+        ...prev,
+        ...items.map((item) => ({
+          designation: item.designation,
+          staffName: item.staffName,
+        })),
+      ]);
+      clearPendingHkEntries();
+      setHkDeploymentForm({ designation: '', name: '' });
+      setHkDeploymentPhoto(null);
+      setHkPickerOpen(null);
+      setRecordAddHkOpen(false);
+
+      Alert.alert('Success', `${savedCount ?? items.length} housekeeping log(s) saved.`);
+      invalidateHousekeepingCache();
+      refreshHkData();
+    } catch (err) {
+      console.error('Save housekeeping logs failed:', err);
+      Alert.alert('Error', err?.message || 'Could not save housekeeping logs.');
     } finally {
       setIsSavingHousekeeping(false);
     }
   };
 
-  const buildAttendanceEntries = () =>
-    Object.entries(staffAttendanceData)
-      .filter(([, count]) => count !== '' && count != null)
-      .map(([key, count]) => {
-        const [role, shift] = key.split('||');
-        return {
-          roleName: role,
-          shiftName: shift,
-          deployedCount: parseInt(count, 10) || 0,
-        };
-      });
-
-  const saveTotalDeployment = async () => {
-    try {
-      const entries = buildAttendanceEntries();
-      if (entries.length === 0) {
-        Alert.alert('Enter counts', 'Enter deployed headcount for at least one role and shift.');
-        return;
-      }
-
-      setIsSavingAttendance(true);
-      const accessToken = (await ensureValidAccessToken()) || token;
-      if (!accessToken) {
-        Alert.alert('Not signed in', 'Please sign in again to save total deployment.');
-        return;
-      }
-
-      await postDailyAttendance(accessToken, {
-        date: new Date().toISOString(),
-        entries,
-      });
-
-      Alert.alert('Success', 'Total deployment counts saved.');
-      closeTotalDeploymentModal();
-      refreshSecurityData();
-    } catch (err) {
-      console.error('Save total deployment failed:', err);
-      Alert.alert('Error', err?.message || 'Could not save total deployment.');
-    } finally {
-      setIsSavingAttendance(false);
+  const buildDraftSecurityEntry = () => {
+    const designation = deploymentForm.designation.trim();
+    const deployName = deploymentForm.name.trim();
+    const deployLocation = deploymentForm.location.trim();
+    if (!designation || !deployName || !deployLocation || !staffAttendancePhoto?.uri) {
+      return null;
     }
+    return {
+      designation,
+      staffName: deployName,
+      location: deployLocation,
+      photo: staffAttendancePhoto,
+    };
   };
 
-  const saveIndividualDeployment = async () => {
-    try {
-      const designation = deploymentForm.designation.trim();
-      const deployName = deploymentForm.name.trim();
-      const deployLocation = deploymentForm.location.trim();
-      if (!designation || !deployName || !deployLocation) {
+  const addSecurityToQueue = () => {
+    const draft = buildDraftSecurityEntry();
+    if (!draft) {
+      if (!deploymentForm.designation.trim() || !deploymentForm.name.trim() || !deploymentForm.location.trim()) {
         Alert.alert('Missing details', 'Please select designation, staff name, and location.');
-        return;
+      } else {
+        Alert.alert('Photo required', 'Take a verification photo with the camera.');
       }
-      if (!staffAttendancePhoto?.uri) {
-        Alert.alert('Photo required', 'Add a deployment photo using the camera or gallery.');
-        return;
-      }
+      return;
+    }
 
+    addPendingSecurityEntry(draft);
+    setDeploymentForm({ designation: '', name: '', location: '' });
+    setStaffAttendancePhoto(null);
+    setDeploymentPickerOpen(null);
+  };
+
+  const collectSecurityItemsToSave = () => {
+    const items = pendingSecurityEntries.map((e) => ({
+      designation: e.designation,
+      staffName: e.staffName,
+      location: e.location,
+      photo: e.photo,
+    }));
+    const draft = buildDraftSecurityEntry();
+    if (draft) items.push(draft);
+    return items;
+  };
+
+  const saveAllSecurityEntries = async () => {
+    const items = collectSecurityItemsToSave();
+    if (items.length === 0) {
+      Alert.alert('Nothing to save', 'Tap Add Security to queue at least one entry (with photo).');
+      return;
+    }
+
+    try {
       setIsSavingAttendance(true);
       const accessToken = (await ensureValidAccessToken()) || token;
       if (!accessToken) {
-        Alert.alert('Not signed in', 'Please sign in again to save individual deployment.');
+        Alert.alert('Not signed in', 'Please sign in again to save security logs.');
         return;
       }
 
-      await postDailyAttendanceWithDeployment(
+      const savedCount = await postBulkSecurityDeployments(
         accessToken,
-        {
-          date: new Date().toISOString(),
-          entries: [],
-          deploymentContext: {
-            designation,
-            staffName: deployName,
-            location: deployLocation,
-            photoUrls: [],
-            photoLatitude: staffAttendancePhoto.latitude ?? null,
-            photoLongitude: staffAttendancePhoto.longitude ?? null,
-            photoAccuracyMeters: staffAttendancePhoto.accuracy ?? null,
-            photoCapturedAt: staffAttendancePhoto.capturedAt ?? null,
-          },
-        },
-        staffAttendancePhoto,
+        new Date().toISOString(),
+        items,
       );
 
-      Alert.alert('Success', 'Individual deployment logged.');
-      closeIndividualDeploymentModal();
+      setCommittedSecurityEntries((prev) => [
+        ...prev,
+        ...items.map((item) => ({
+          designation: item.designation,
+          staffName: item.staffName,
+          location: item.location,
+        })),
+      ]);
+      clearPendingSecurityEntries();
+      setDeploymentForm({ designation: '', name: '', location: '' });
+      setStaffAttendancePhoto(null);
+      setDeploymentPickerOpen(null);
+      setRecordAddSecurityOpen(false);
+
+      Alert.alert('Success', `${savedCount ?? items.length} security log(s) saved.`);
       refreshSecurityData();
     } catch (err) {
-      console.error('Save individual deployment failed:', err);
-      Alert.alert('Error', err?.message || 'Could not save individual deployment.');
+      console.error('Save security logs failed:', err);
+      Alert.alert('Error', err?.message || 'Could not save security logs.');
     } finally {
       setIsSavingAttendance(false);
     }
@@ -2303,33 +2429,19 @@ export default function AdminDashboardScreen({ navigation }) {
         onSave={saveAmcCertificate}
       />
 
-      <HousekeepingAttendanceForm
-        visible={recordHousekeepingOpen}
-        onClose={() => setRecordHousekeepingOpen(false)}
-        roles={fmHkRoles}
-        attendanceData={hkAttendanceData}
-        photo={hkAttendancePhoto}
-        onPickCamera={async () => {
-          try {
-            const p = await pickGeoPhotoFromCamera();
-            if (p) setHkAttendancePhoto(p);
-          } catch (err) {
-            Alert.alert('Camera', err?.message || 'Could not use camera.');
-          }
-        }}
-        onPickGallery={async () => {
-          try {
-            const p = await pickGeoPhotoFromLibrary();
-            if (p) setHkAttendancePhoto(p);
-          } catch (err) {
-            Alert.alert('Photos', err?.message || 'Could not open gallery.');
-          }
-        }}
-        onClearPhoto={() => setHkAttendancePhoto(null)}
-        onChangeAttendance={(role, shift, value) =>
-          setHkAttendanceData((p) => ({ ...p, [`${role}||${shift}`]: value }))
-        }
-        onSave={saveHousekeepingAttendance}
+      <HousekeepingDeploymentForm
+        visible={recordAddHkOpen}
+        onClose={closeAddHkModal}
+        form={hkDeploymentForm}
+        photo={hkDeploymentPhoto}
+        pendingEntries={pendingHkEntries}
+        pendingCount={pendingHkCount}
+        draftQueuedCount={buildDraftHkEntry() ? 1 : 0}
+        onOpenPicker={setHkPickerOpen}
+        onPickCamera={pickHkPhotoFromCamera}
+        onAddToQueue={addHkToQueue}
+        onRemoveQueued={removePendingHkEntry}
+        onSaveAll={saveAllHkEntries}
         saving={isSavingHousekeeping}
       />
 
@@ -2362,57 +2474,52 @@ export default function AdminDashboardScreen({ navigation }) {
 
       <SecurityFormModal
         visible={recordPatrolOpen}
-        onClose={() => setRecordPatrolOpen(false)}
+        onClose={() => {
+          setRecordPatrolOpen(false);
+          setPatrolPickerOpen(false);
+          setPatrolForm({ staffId: '', locationId: '', notes: '', photos: [] });
+        }}
         title="Record patrolling"
         footer={
           <SecSaveButton
             label="Save patrol log"
-            onPress={savePatrol}
+            onPress={() => {
+              void savePatrol();
+            }}
             loading={isSavingPatrol}
-            disabled={isSavingPatrol}
           />
         }
       >
-            <TextInput
-              style={styles.secInput}
-              placeholder="Staff name / ID"
-              placeholderTextColor={SEC_PLACEHOLDER}
-              value={patrolForm.staffId}
-              onChangeText={(v) => setPatrolForm((p) => ({ ...p, staffId: v }))}
-            />
-            {staffRoster.length > 0 ? (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                style={styles.secStaffChipRow}
-                contentContainerStyle={styles.secStaffChipRowContent}
+            <TouchableOpacity
+              style={styles.secSelect}
+              activeOpacity={0.85}
+              onPress={() => {
+                if (patrolStaffNameOptions.length === 0) {
+                  Alert.alert(
+                    'No deployed staff',
+                    'Add security via Add Security first, then record patrolling.',
+                  );
+                  return;
+                }
+                setPatrolPickerOpen(true);
+              }}
+            >
+              <Text
+                style={[
+                  styles.secSelectText,
+                  !patrolForm.staffId && styles.secSelectPlaceholder,
+                ]}
+                numberOfLines={1}
               >
-                {staffRoster.map((s) => (
-                  <TouchableOpacity
-                    key={s.id || s.name}
-                    style={[
-                      styles.secStaffChip,
-                      patrolForm.staffId === s.name && styles.secStaffChipActive,
-                    ]}
-                    onPress={() => setPatrolForm((p) => ({ ...p, staffId: s.name }))}
-                  >
-                    <Text
-                      style={[
-                        styles.secStaffChipText,
-                        patrolForm.staffId === s.name && styles.secStaffChipTextActive,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {s.name}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            ) : (
-              <Text style={styles.secModalHint}>
-                Expand Security and wait for roster to load, or add staff first.
+                {patrolForm.staffId || 'Select security staff'}
               </Text>
-            )}
+              <Ionicons name="chevron-down" size={18} color={SEC.textMuted} />
+            </TouchableOpacity>
+            {patrolStaffNameOptions.length === 0 ? (
+              <Text style={styles.secModalHint}>
+                Deploy staff via Add Security — they will appear here for patrolling.
+              </Text>
+            ) : null}
             <TextInput
               style={styles.secInput}
               placeholder="e.g. Tower A basement"
@@ -2524,20 +2631,29 @@ export default function AdminDashboardScreen({ navigation }) {
       </Modal>
 
       <SecurityFormModal
-        visible={recordIndividualDeploymentOpen}
-        onClose={closeIndividualDeploymentModal}
-        title="Individual deployment"
+        visible={recordAddSecurityOpen}
+        onClose={closeAddSecurityModal}
+        title="Add Security"
+        maxHeight="88%"
         footer={
           <SecSaveButton
-            label="Save individual log"
-            onPress={saveIndividualDeployment}
+            label={
+              (() => {
+                const n = pendingSecurityCount + (buildDraftSecurityEntry() ? 1 : 0);
+                return n > 0 ? `Save all (${n})` : 'Save all';
+              })()
+            }
+            onPress={saveAllSecurityEntries}
             loading={isSavingAttendance}
-            disabled={isSavingAttendance}
+            disabled={
+              isSavingAttendance ||
+              (pendingSecurityCount === 0 && !buildDraftSecurityEntry())
+            }
           />
         }
       >
               <Text style={styles.secModalHint}>
-                Log one staff member at a post with a verification photo.
+                Add staff with camera photo to the list, then save everything in one step.
               </Text>
               <TouchableOpacity
                 style={styles.secSelect}
@@ -2590,24 +2706,14 @@ export default function AdminDashboardScreen({ navigation }) {
                 <Ionicons name="chevron-down" size={18} color={SEC.textMuted} />
               </TouchableOpacity>
 
-              <View style={styles.deploymentPhotoRow}>
-                <TouchableOpacity
-                  style={styles.secUploadBtn}
-                  activeOpacity={0.85}
-                  onPress={pickStaffPhotoFromCamera}
-                >
-                  <Ionicons name="camera-outline" size={18} color={SEC.teal} />
-                  <Text style={styles.secUploadBtnText}>Camera</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.secUploadBtn}
-                  activeOpacity={0.85}
-                  onPress={pickStaffPhotoFromLibrary}
-                >
-                  <Ionicons name="images-outline" size={18} color={SEC.teal} />
-                  <Text style={styles.secUploadBtnText}>Gallery</Text>
-                </TouchableOpacity>
-              </View>
+              <TouchableOpacity
+                style={styles.secUploadBtn}
+                activeOpacity={0.85}
+                onPress={pickStaffPhotoFromCamera}
+              >
+                <Ionicons name="camera-outline" size={18} color={SEC.teal} />
+                <Text style={styles.secUploadBtnText}>Camera</Text>
+              </TouchableOpacity>
               {staffAttendancePhoto?.uri ? (
                 <View style={styles.secPhotoPreviewWrap}>
                   <Image source={{ uri: staffAttendancePhoto.uri }} style={styles.attendancePhotoPreview} />
@@ -2623,120 +2729,84 @@ export default function AdminDashboardScreen({ navigation }) {
                   </TouchableOpacity>
                 </View>
               ) : null}
-      </SecurityFormModal>
 
-      <SecurityFormModal
-        visible={recordTotalDeploymentOpen}
-        onClose={closeTotalDeploymentModal}
-        title="Total deployment"
-        maxHeight="88%"
-        footer={
-          <SecSaveButton
-            label="Save total counts"
-            onPress={saveTotalDeployment}
-            loading={isSavingAttendance}
-            disabled={isSavingAttendance}
-          />
-        }
-      >
-              <Text style={styles.secModalHint}>
-                Enter deployed headcount per role and shift. Add one verification photo below if required.
-              </Text>
-              {sanctionedStrength.length === 0 ? (
-                <Text style={styles.secModalHint}>
-                  Expand Security and wait for roster data, or add sanctioned strength in Supabase.
-                </Text>
+              <TouchableOpacity
+                style={[styles.secSaveBtn, styles.secAddSecurityBtn]}
+                activeOpacity={0.9}
+                onPress={addSecurityToQueue}
+              >
+                <Ionicons name="add-circle-outline" size={18} color={SEC.bg} />
+                <Text style={styles.secSaveBtnText}>Add Security</Text>
+              </TouchableOpacity>
+
+              {pendingSecurityEntries.length > 0 ? (
+                <View style={styles.pendingSecurityList}>
+                  <Text style={styles.pendingSecurityTitle}>
+                    Queued ({pendingSecurityEntries.length})
+                  </Text>
+                  {pendingSecurityEntries.map((entry) => (
+                    <View key={entry.localId} style={styles.pendingSecurityRow}>
+                      {entry.photo?.uri ? (
+                        <Image source={{ uri: entry.photo.uri }} style={styles.pendingSecurityThumb} />
+                      ) : null}
+                      <View style={styles.pendingSecurityMeta}>
+                        <Text style={styles.pendingSecurityName} numberOfLines={1}>
+                          {entry.staffName}
+                        </Text>
+                        <Text style={styles.pendingSecuritySub} numberOfLines={1}>
+                          {entry.designation} · {entry.location}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        onPress={() => removePendingSecurityEntry(entry.localId)}
+                        hitSlop={8}
+                        activeOpacity={0.85}
+                      >
+                        <Ionicons name="close-circle" size={22} color={SEC.red} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
               ) : null}
-              {sanctionedStrength.map((role) => {
-                const shifts = [];
-                if (role.shift1Count > 0) {
-                  shifts.push({
-                    key: 's1',
-                    label: `S1 (${role.shift1Count})`,
-                    value: staffAttendanceData[`${role.roleName}||Shift1`] || '',
-                    onChangeText: (v) =>
-                      setStaffAttendanceData((p) => ({ ...p, [`${role.roleName}||Shift1`]: v })),
-                  });
-                }
-                if (role.shift2Count > 0) {
-                  shifts.push({
-                    key: 's2',
-                    label: `S2 (${role.shift2Count})`,
-                    value: staffAttendanceData[`${role.roleName}||Shift2`] || '',
-                    onChangeText: (v) =>
-                      setStaffAttendanceData((p) => ({ ...p, [`${role.roleName}||Shift2`]: v })),
-                  });
-                }
-                if (role.shift3Count > 0) {
-                  shifts.push({
-                    key: 's3',
-                    label: `S3 (${role.shift3Count})`,
-                    value: staffAttendanceData[`${role.roleName}||Shift3`] || '',
-                    onChangeText: (v) =>
-                      setStaffAttendanceData((p) => ({ ...p, [`${role.roleName}||Shift3`]: v })),
-                  });
-                }
-                if (role.generalShiftCount > 0) {
-                  shifts.push({
-                    key: 'gnl',
-                    label: `Gnl (${role.generalShiftCount})`,
-                    value: staffAttendanceData[`${role.roleName}||Gnl`] || '',
-                    onChangeText: (v) =>
-                      setStaffAttendanceData((p) => ({ ...p, [`${role.roleName}||Gnl`]: v })),
-                  });
-                }
-                if (shifts.length === 0) return null;
-                return (
-                  <AttendanceRoleRow
-                    key={role.id}
-                    theme={SEC}
-                    roleLabel={role.roleName}
-                    placeholderColor={SEC_PLACEHOLDER}
-                    shifts={shifts}
-                  />
-                );
-              })}
-              <ModulePhotoSection
-                theme={SEC}
-                photo={deploymentAttendancePhoto}
-                onCamera={async () => {
-                  try {
-                    const p = await pickGeoPhotoFromCamera();
-                    if (p) setDeploymentAttendancePhoto(p);
-                  } catch (err) {
-                    Alert.alert('Camera', err?.message || 'Could not use camera.');
-                  }
-                }}
-                onGallery={async () => {
-                  try {
-                    const p = await pickGeoPhotoFromLibrary();
-                    if (p) setDeploymentAttendancePhoto(p);
-                  } catch (err) {
-                    Alert.alert('Photos', err?.message || 'Could not open gallery.');
-                  }
-                }}
-                onRemovePhoto={() => setDeploymentAttendancePhoto(null)}
-              />
       </SecurityFormModal>
 
       <Modal
-        visible={deploymentPickerOpen != null}
+        visible={activePickerField != null}
         transparent
         animationType="fade"
-        onRequestClose={() => setDeploymentPickerOpen(null)}
+        onRequestClose={() => {
+          setDeploymentPickerOpen(null);
+          setHkPickerOpen(null);
+          setPatrolPickerOpen(false);
+        }}
       >
         <View style={styles.secModalOverlay}>
-          <Pressable style={styles.secModalBackdrop} onPress={() => setDeploymentPickerOpen(null)} />
+          <Pressable
+            style={styles.secModalBackdrop}
+            onPress={() => {
+              setDeploymentPickerOpen(null);
+              setHkPickerOpen(null);
+              setPatrolPickerOpen(false);
+            }}
+          />
           <View style={[styles.secModalSheetHost, styles.deploymentPickerContainer]}>
           <View style={[styles.secModalSheet, styles.deploymentPickerSheet]}>
             <View style={styles.secModalHandle} />
             <View style={styles.modalHeader}>
               <Text style={styles.secModalTitle}>
-                {deploymentPickerOpen === 'designation' && 'Select designation'}
-                {deploymentPickerOpen === 'location' && 'Select location'}
-                {deploymentPickerOpen === 'name' && 'Select staff name'}
+                {activePickerField === 'designation' && 'Select designation'}
+                {activePickerField === 'location' && 'Select location'}
+                {activePickerField === 'name' && 'Select staff name'}
+                {activePickerField === 'staff' && 'Select security staff'}
               </Text>
-              <TouchableOpacity onPress={() => setDeploymentPickerOpen(null)} style={styles.closeBtn}>
+              <TouchableOpacity
+                onPress={() => {
+                  setDeploymentPickerOpen(null);
+                  setHkPickerOpen(null);
+                  setPatrolPickerOpen(false);
+                }}
+                style={styles.closeBtn}
+              >
                 <Ionicons name="close" size={22} color={SEC.textMuted} />
               </TouchableOpacity>
             </View>
@@ -2745,20 +2815,32 @@ export default function AdminDashboardScreen({ navigation }) {
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             >
-              {deploymentPickerOptions.map((opt) => (
+              {activePickerOptions.map((opt) => (
                 <TouchableOpacity
                   key={opt}
                   style={styles.secPickerRow}
                   activeOpacity={0.7}
                   onPress={() => {
-                    if (deploymentPickerOpen === 'designation') {
-                      setDeploymentForm((p) => ({ ...p, designation: opt }));
-                    } else if (deploymentPickerOpen === 'location') {
-                      setDeploymentForm((p) => ({ ...p, location: opt }));
-                    } else if (deploymentPickerOpen === 'name') {
-                      setDeploymentForm((p) => ({ ...p, name: opt }));
+                    if (recordAddHkOpen) {
+                      if (hkPickerOpen === 'designation') {
+                        setHkDeploymentForm((p) => ({ ...p, designation: opt }));
+                      } else if (hkPickerOpen === 'name') {
+                        setHkDeploymentForm((p) => ({ ...p, name: opt }));
+                      }
+                      setHkPickerOpen(null);
+                    } else if (recordPatrolOpen && patrolPickerOpen) {
+                      setPatrolForm((p) => ({ ...p, staffId: opt }));
+                      setPatrolPickerOpen(false);
+                    } else {
+                      if (deploymentPickerOpen === 'designation') {
+                        setDeploymentForm((p) => ({ ...p, designation: opt }));
+                      } else if (deploymentPickerOpen === 'location') {
+                        setDeploymentForm((p) => ({ ...p, location: opt }));
+                      } else if (deploymentPickerOpen === 'name') {
+                        setDeploymentForm((p) => ({ ...p, name: opt }));
+                      }
+                      setDeploymentPickerOpen(null);
                     }
-                    setDeploymentPickerOpen(null);
                   }}
                 >
                   <Text style={styles.secPickerRowText}>{opt}</Text>
@@ -2926,7 +3008,7 @@ const styles = StyleSheet.create({
     backgroundColor: SEC.bg,
   },
   moduleRowHkExpanded: {
-    backgroundColor: HK.bg,
+    backgroundColor: SEC.bg,
   },
   moduleRowRentalsExpanded: {
     backgroundColor: SEC.bg,
@@ -5617,6 +5699,61 @@ const styles = StyleSheet.create({
       default: {},
     }),
   },
+  secAddSecurityBtn: {
+    flexDirection: 'row',
+    gap: 8,
+    backgroundColor: SEC.gold,
+  },
+  pendingSecurityList: {
+    marginTop: 16,
+    gap: 8,
+  },
+  pendingSecurityTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: SEC.textMuted,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  pendingSecurityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: SEC.border,
+    backgroundColor: SEC.surfaceRaised || SEC.bg,
+  },
+  pendingSecurityThumb: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    backgroundColor: SEC.bg,
+  },
+  pendingSecurityMeta: {
+    flex: 1,
+    minWidth: 0,
+  },
+  pendingSecurityName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: SEC.text,
+  },
+  pendingSecuritySub: {
+    fontSize: 11,
+    color: SEC.textMuted,
+    marginTop: 2,
+  },
+  premiumRoleRowQueued: {
+    borderColor: SEC.teal,
+    backgroundColor: 'rgba(62, 232, 197, 0.08)',
+  },
+  roleQueuedBadge: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: SEC.teal,
+  },
   secSaveBtnDisabled: {
     opacity: 0.7,
   },
@@ -6301,6 +6438,15 @@ const styles = StyleSheet.create({
     color: HK.textMuted,
     textAlign: 'center',
     paddingVertical: 20,
+  },
+  hkPremiumRoleRowQueued: {
+    borderColor: HK.gold,
+    backgroundColor: HK.goldDim,
+  },
+  hkRoleQueuedBadge: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: HK.gold,
   },
   hkPremiumRoleRow: {
     flexDirection: 'row',

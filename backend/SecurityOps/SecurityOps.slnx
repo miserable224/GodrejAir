@@ -1,8 +1,11 @@
 <Solution>
-  <Folder Name="/src/">
+  <Folder Name="/SecurityOps/">
     <Project Path="src/SecurityOps.Api/SecurityOps.Api.csproj" />
     <Project Path="src/SecurityOps.Application/SecurityOps.Application.csproj" />
     <Project Path="src/SecurityOps.Domain/SecurityOps.Domain.csproj" />
     <Project Path="src/SecurityOps.Infrastructure/SecurityOps.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/HousekeepingOps/">
+    <Project Path="../HousekeepingOps/src/HousekeepingOps.Api/HousekeepingOps.Api.csproj" />
   </Folder>
 </Solution>

@@ -10,6 +10,10 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+var port = Environment.GetEnvironmentVariable("PORT");
+if (!string.IsNullOrWhiteSpace(port))
+    builder.WebHost.UseUrls($"http://+:{port}");
+
 builder.Host.UseSerilog((_, _, cfg) =>
     cfg.MinimumLevel.Information()
         .Enrich.FromLogContext()
@@ -32,7 +36,7 @@ builder.Services.AddCors(options =>
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Security Operations API", Version = "v1" });
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Security API (Godrej Air)", Version = "v1" });
     var bearer = new OpenApiSecurityScheme
     {
         Name = "Authorization",
@@ -47,6 +51,14 @@ builder.Services.AddSwaggerGen(c =>
     {
         [bearer] = Array.Empty<string>()
     });
+    c.TagActionsBy(api =>
+    {
+        var path = api.RelativePath ?? string.Empty;
+        if (path.StartsWith("api/security", StringComparison.OrdinalIgnoreCase))
+            return new[] { "Security" };
+        return new[] { "Shared" };
+    });
+    c.DocInclusionPredicate((_, _) => true);
 });
 
 var jwtSection = builder.Configuration.GetSection("Jwt");

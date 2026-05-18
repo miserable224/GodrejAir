@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using SecurityOps.Application.Common.Interfaces;
+using SecurityOps.Domain;
 using SecurityOps.Domain.Entities;
 
 namespace SecurityOps.Infrastructure.Persistence;
@@ -34,6 +35,9 @@ public sealed class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<SecurityAppUser> SecurityAppUsers => Set<SecurityAppUser>();
     public DbSet<SecurityRefreshToken> SecurityRefreshTokens => Set<SecurityRefreshToken>();
     public DbSet<SecurityEmailOtp> SecurityEmailOtps => Set<SecurityEmailOtp>();
+
+    public DbSet<HkVendorContract> HkVendorContracts => Set<HkVendorContract>();
+    public DbSet<HkContractRate> HkContractRates => Set<HkContractRate>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -142,6 +146,8 @@ public sealed class ApplicationDbContext : DbContext, IApplicationDbContext
         {
             e.ToTable("security_deployment_logs");
             e.HasKey(x => x.Id);
+            e.Property(x => x.Module).HasMaxLength(32).HasDefaultValue(DeploymentModules.Security);
+            e.HasIndex(x => x.Module);
             e.Property(x => x.Designation).HasMaxLength(100);
             e.Property(x => x.StaffName).HasMaxLength(200).IsRequired();
             e.Property(x => x.LocationName).HasMaxLength(200).IsRequired();
@@ -282,6 +288,31 @@ public sealed class ApplicationDbContext : DbContext, IApplicationDbContext
             e.Property(x => x.TokenHash).HasMaxLength(128).IsRequired();
             e.HasIndex(x => x.TokenHash);
             e.HasOne(x => x.User).WithMany(x => x.RefreshTokens).HasForeignKey(x => x.UserId);
+        });
+
+        modelBuilder.Entity<HkVendorContract>(e =>
+        {
+            e.ToTable("hk_vendor_contracts");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.VendorName).HasMaxLength(200).IsRequired();
+            e.Property(x => x.ContractNumber).HasMaxLength(80).IsRequired();
+            e.Property(x => x.ServiceChargePercentage).HasPrecision(6, 2);
+            e.Property(x => x.GstPercentage).HasPrecision(6, 2);
+            e.HasIndex(x => x.IsActive);
+        });
+
+        modelBuilder.Entity<HkContractRate>(e =>
+        {
+            e.ToTable("hk_contract_rates");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.RoleCode).HasMaxLength(50).IsRequired();
+            e.Property(x => x.RoleName).HasMaxLength(120).IsRequired();
+            e.Property(x => x.MonthlyRate).HasPrecision(12, 2);
+            e.Property(x => x.Shift1Sanctioned).HasColumnName("shift1_sanctioned");
+            e.Property(x => x.Shift2Sanctioned).HasColumnName("shift2_sanctioned");
+            e.Property(x => x.IsActive).HasColumnName("is_active");
+            e.HasIndex(x => new { x.ContractId, x.RoleCode }).IsUnique();
+            e.HasOne(x => x.Contract).WithMany(x => x.RoleRates).HasForeignKey(x => x.ContractId);
         });
 
         // Many Supabase schemas have created_at / updated_at but not user FK columns. AuditableEntity

@@ -27,6 +27,31 @@ internal static class SecurityOpsResolver
             .FirstOrDefaultAsync(cancellationToken);
     }
 
+    /// <summary>Find staff by name/badge, or create a guard row so mobile patrol can proceed.</summary>
+    public static async Task<SecurityStaff> GetOrCreateStaffByNameAsync(
+        IApplicationDbContext db,
+        string? nameOrBadge,
+        CancellationToken cancellationToken)
+    {
+        var existing = await ResolveStaffByNameOrBadgeAsync(db, nameOrBadge, cancellationToken);
+        if (existing is not null) return existing;
+
+        var name = (nameOrBadge ?? "").Trim();
+        if (name.Length == 0)
+            throw new InvalidOperationException("Staff name is required.");
+
+        var staff = new SecurityStaff
+        {
+            Name = name,
+            BadgeNumber = $"M-{Guid.NewGuid():N}"[..12],
+            Role = "SECURITY_GUARD",
+            IsActive = true,
+        };
+        db.SecurityStaff.Add(staff);
+        await db.SaveChangesAsync(cancellationToken);
+        return staff;
+    }
+
     public static async Task<SecurityStaff> ResolveRecorderStaffAsync(
         IApplicationDbContext db,
         SecurityStaff? patrolStaff,

@@ -23,7 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS, SIZES, SHADOWS, DARK } from '../constants/theme';
 import AmbientBackground from '../components/AmbientBackground';
 import { useAuth } from '../context/AuthContext';
-import { apiService } from '../services/apiService';
+import { apiService } from '../modules/shared';
 
 const { width } = Dimensions.get('window');
 

@@ -356,7 +356,7 @@ export const ADMIN_COMMAND_MODULES = [
     title: 'Housekeeping',
     subtitle: 'Staff, cleaning & tasks',
     icon: 'sparkles',
-    color: '#6366F1',
+    color: '#2dd4bf',
   },
   {
     key: 'Expenses',

@@ -33,5 +33,8 @@ public interface IApplicationDbContext : IUnitOfWork
     DbSet<SecurityRefreshToken> SecurityRefreshTokens { get; }
     DbSet<SecurityEmailOtp> SecurityEmailOtps { get; }
 
+    DbSet<HkVendorContract> HkVendorContracts { get; }
+    DbSet<HkContractRate> HkContractRates { get; }
+
     DatabaseFacade Database { get; }
 }

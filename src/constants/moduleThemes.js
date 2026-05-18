@@ -1,6 +1,6 @@
 /**
  * LedgerX module palettes — dark shell shared across ops modules.
- * Security (green), Housekeeping (amber), Water (sky).
+ * Security (green), Housekeeping (same as Security), Water (sky).
  */
 import { SEC as SECURITY, SEC_FONTS } from './securityTheme';
 
@@ -25,18 +25,8 @@ export const SEC = {
   saveOnAccent: SECURITY.bg,
 };
 
-export const HK = {
-  ...shell,
-  accent: '#f59e0b',
-  accentDim: 'rgba(245, 158, 11, 0.14)',
-  accentBorder: 'rgba(245, 158, 11, 0.4)',
-  gold: '#f59e0b',
-  goldDim: 'rgba(245, 158, 11, 0.12)',
-  red: '#f87171',
-  saveAccent: '#f59e0b',
-  saveOnAccent: '#0b0e14',
-  headerGradient: ['#1a1508', '#0b0e14'],
-};
+/** Housekeeping uses the same LedgerX palette as Security ops. */
+export const HK = { ...SEC };
 
 export const WATER = {
   ...shell,
