@@ -110,9 +110,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-// HTTPS redirect breaks cross-origin calls from Expo Web (http://localhost:8081 → http://localhost:5115).
-if (!app.Environment.IsDevelopment())
-    app.UseHttpsRedirection();
+// TLS is terminated at Render/Vercel edge; container listens on HTTP only — no UseHttpsRedirection.
 
 app.UseAuthentication();
 app.UseAuthorization();
@@ -122,6 +120,9 @@ if (string.IsNullOrWhiteSpace(webRoot))
     webRoot = Path.Combine(app.Environment.ContentRootPath, "wwwroot");
 Directory.CreateDirectory(webRoot);
 app.UseStaticFiles();
+
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "security-api" }));
+app.MapGet("/", () => Results.Ok(new { status = "healthy", service = "security-api", health = "/health" }));
 
 app.MapControllers();
 

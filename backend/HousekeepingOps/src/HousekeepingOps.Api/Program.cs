@@ -87,8 +87,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-if (!app.Environment.IsDevelopment())
-    app.UseHttpsRedirection();
+// TLS is terminated at Render edge; container listens on HTTP only.
 
 app.UseAuthentication();
 app.UseAuthorization();
@@ -98,6 +97,9 @@ if (string.IsNullOrWhiteSpace(webRoot))
     webRoot = Path.Combine(app.Environment.ContentRootPath, "wwwroot");
 Directory.CreateDirectory(webRoot);
 app.UseStaticFiles();
+
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "housekeeping-api" }));
+app.MapGet("/", () => Results.Ok(new { status = "healthy", service = "housekeeping-api", health = "/health" }));
 
 app.MapControllers();
 
