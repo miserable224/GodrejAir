@@ -1,0 +1,39 @@
+# Render Blueprint — optional import, or match these settings manually in the dashboard.
+services:
+  - type: web
+    name: godrej-security-api
+    runtime: docker
+    dockerfilePath: backend/SecurityOps/Dockerfile
+    dockerContext: .
+    branch: dev
+    plan: free
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      - key: Supabase__ConnectionString
+        sync: false
+      - key: Jwt__Issuer
+        value: SecurityOps
+      - key: Jwt__Audience
+        value: SecurityOpsClients
+      - key: Jwt__SigningKey
+        generateValue: true
+
+  - type: web
+    name: godrej-housekeeping-api
+    runtime: docker
+    dockerfilePath: backend/HousekeepingOps/Dockerfile
+    dockerContext: .
+    branch: dev
+    plan: free
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      - key: Supabase__ConnectionString
+        sync: false
+      - key: Jwt__Issuer
+        value: SecurityOps
+      - key: Jwt__Audience
+        value: SecurityOpsClients
+      - key: Jwt__SigningKey
+        sync: false
