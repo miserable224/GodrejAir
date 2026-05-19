@@ -1,4 +1,4 @@
-# Build from repository root (Render: Root Directory empty, Dockerfile Path = backend/SecurityOps/Dockerfile)
+# Unified API (auth + security + housekeeping). Render: Dockerfile = backend/SecurityOps/Dockerfile, context = .
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY backend/SecurityOps/src/ ./SecurityOps/src/

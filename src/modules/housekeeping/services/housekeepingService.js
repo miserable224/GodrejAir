@@ -1,4 +1,4 @@
-import { getHousekeepingApiOrigin } from '../../shared/config/apiConfig';
+import { getSecurityApiOrigin } from '../../shared/config/apiConfig';
 import { fetchWithNetworkHint } from '../../shared/utils/networkError';
 import { ensureValidAccessToken } from '../../shared/services/authService';
 
@@ -6,11 +6,11 @@ const hkCache = new Map();
 const CACHE_TTL_MS = 2 * 60 * 1000;
 
 function apiBase() {
-  return `${getHousekeepingApiOrigin()}/api`;
+  return `${getSecurityApiOrigin()}/api`;
 }
 
 function apiNetworkHint() {
-  return `Cannot reach Housekeeping API at ${getHousekeepingApiOrigin()}. Set EXPO_PUBLIC_HOUSEKEEPING_API_URL.`;
+  return `Cannot reach API at ${getSecurityApiOrigin()}. Set EXPO_PUBLIC_API_URL.`;
 }
 
 function getCached(key) {

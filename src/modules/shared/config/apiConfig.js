@@ -41,10 +41,13 @@ export function resolveSecurityApiOrigin() {
 }
 
 /**
- * Housekeeping API. Default port 5116.
+ * Housekeeping routes — same host as Security API (single deployment).
+ * EXPO_PUBLIC_HOUSEKEEPING_API_URL overrides only if you run a separate HK API locally.
  */
 export function resolveHousekeepingApiOrigin() {
-  return resolveEnvOrigin(process.env.EXPO_PUBLIC_HOUSEKEEPING_API_URL, 5116);
+  const dedicated = normalizeOrigin(process.env.EXPO_PUBLIC_HOUSEKEEPING_API_URL);
+  if (dedicated) return dedicated;
+  return resolveSecurityApiOrigin();
 }
 
 /** @deprecated Use resolveSecurityApiOrigin */
@@ -66,7 +69,7 @@ export function getHousekeepingApiOrigin() {
   const origin = resolveHousekeepingApiOrigin();
   if (!origin) {
     throw new Error(
-      'Housekeeping API URL is not configured. Set EXPO_PUBLIC_HOUSEKEEPING_API_URL (e.g. http://localhost:5116).',
+      'API URL is not configured. Set EXPO_PUBLIC_API_URL or EXPO_PUBLIC_SECURITY_API_URL.',
     );
   }
   return origin;

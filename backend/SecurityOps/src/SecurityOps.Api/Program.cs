@@ -36,7 +36,7 @@ builder.Services.AddCors(options =>
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Security API (Godrej Air)", Version = "v1" });
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Godrej Air API", Version = "v1" });
     var bearer = new OpenApiSecurityScheme
     {
         Name = "Authorization",
@@ -56,6 +56,8 @@ builder.Services.AddSwaggerGen(c =>
         var path = api.RelativePath ?? string.Empty;
         if (path.StartsWith("api/security", StringComparison.OrdinalIgnoreCase))
             return new[] { "Security" };
+        if (path.StartsWith("api/housekeeping", StringComparison.OrdinalIgnoreCase))
+            return new[] { "Housekeeping" };
         return new[] { "Shared" };
     });
     c.DocInclusionPredicate((_, _) => true);
@@ -121,8 +123,19 @@ if (string.IsNullOrWhiteSpace(webRoot))
 Directory.CreateDirectory(webRoot);
 app.UseStaticFiles();
 
-app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "security-api" }));
-app.MapGet("/", () => Results.Ok(new { status = "healthy", service = "security-api", health = "/health" }));
+app.MapGet("/health", () => Results.Ok(new
+{
+    status = "healthy",
+    service = "godrej-api",
+    modules = new[] { "security", "housekeeping", "auth" },
+}));
+app.MapGet("/", () => Results.Ok(new
+{
+    status = "healthy",
+    service = "godrej-api",
+    health = "/health",
+    swagger = app.Environment.IsDevelopment() ? "/swagger" : null,
+}));
 
 app.MapControllers();
 
