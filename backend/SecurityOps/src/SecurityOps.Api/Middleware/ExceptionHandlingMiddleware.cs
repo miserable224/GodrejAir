@@ -46,6 +46,21 @@ public sealed class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Ex
                     "Invalid database connection string on Render. Set Supabase__ConnectionString to the Supabase URI (postgresql://...) or Host=...;Port=5432;... format.");
             }
 
+            if (e is UriFormatException uriEx)
+            {
+                return (
+                    HttpStatusCode.ServiceUnavailable,
+                    "Invalid Supabase URI. Use the full postgresql:// string from Supabase, or Host=...;Port=5432;Password=... format.");
+            }
+
+            if (e is InvalidOperationException ioe2
+                && (ioe2.Message.Contains("postgresql", StringComparison.OrdinalIgnoreCase)
+                    || ioe2.Message.Contains("Supabase", StringComparison.OrdinalIgnoreCase)
+                    || ioe2.Message.Contains("port", StringComparison.OrdinalIgnoreCase)))
+            {
+                return (HttpStatusCode.ServiceUnavailable, ioe2.Message);
+            }
+
             if (e is PostgresException pg)
             {
                 return pg.SqlState switch

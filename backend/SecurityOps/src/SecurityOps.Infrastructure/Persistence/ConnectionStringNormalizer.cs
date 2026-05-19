@@ -22,7 +22,7 @@ public static class ConnectionStringNormalizer
             if (string.IsNullOrWhiteSpace(raw))
                 continue;
 
-            var normalized = Normalize(raw.Trim());
+            var normalized = Normalize(raw.Trim().Trim('"').Trim('\''));
             Validate(normalized);
             return normalized;
         }
@@ -42,37 +42,62 @@ public static class ConnectionStringNormalizer
         return connectionString;
     }
 
+    /// <summary>
+    /// Manual URI parse — System.Uri breaks when the password contains ':' or other reserved characters.
+    /// </summary>
     private static string FromPostgresUri(string uriString)
     {
-        var uri = new Uri(uriString);
-        var userInfo = uri.UserInfo.Split(':', 2);
+        var value = uriString;
+        if (value.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase))
+            value = "postgresql://" + value["postgres://".Length..];
+
+        const string scheme = "postgresql://";
+        if (!value.StartsWith(scheme, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Expected a postgresql:// connection URI.");
+
+        var remainder = value[scheme.Length..];
+        var atIndex = remainder.LastIndexOf('@');
+        if (atIndex < 0)
+        {
+            throw new InvalidOperationException(
+                "Invalid postgresql URI. Use the full URI from Supabase, or Host=...;Port=5432;... format. " +
+                "If your password has special characters, URL-encode it in the URI or use Host= format.");
+        }
+
+        var userInfo = remainder[..atIndex];
+        var hostPart = remainder[(atIndex + 1)..];
+
+        var userColon = userInfo.IndexOf(':');
+        var username = Uri.UnescapeDataString(userColon >= 0 ? userInfo[..userColon] : userInfo);
+        var password = Uri.UnescapeDataString(userColon >= 0 ? userInfo[(userColon + 1)..] : string.Empty);
+
+        var pathStart = hostPart.IndexOf('/');
+        var hostPort = pathStart >= 0 ? hostPart[..pathStart] : hostPart;
+        var database = pathStart >= 0 ? hostPart[(pathStart + 1)..] : "postgres";
+
+        var queryStart = database.IndexOf('?');
+        if (queryStart >= 0)
+            database = database[..queryStart];
+
+        var portColon = hostPort.LastIndexOf(':');
+        var host = portColon >= 0 ? hostPort[..portColon] : hostPort;
+        var port = 5432;
+        if (portColon >= 0 && !int.TryParse(hostPort[(portColon + 1)..], out port))
+        {
+            throw new InvalidOperationException(
+                $"Invalid port in postgresql URI near '{hostPort[(portColon + 1)..]}'. " +
+                "Use the Supabase URI as copied, or switch to Host=...;Port=...;Password=... format.");
+        }
+
         var builder = new NpgsqlConnectionStringBuilder
         {
-            Host = uri.Host,
-            Port = uri.Port > 0 ? uri.Port : 5432,
-            Database = uri.AbsolutePath.TrimStart('/'),
-            Username = Uri.UnescapeDataString(userInfo[0]),
-            Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : string.Empty,
+            Host = host,
+            Port = port,
+            Database = string.IsNullOrWhiteSpace(database) ? "postgres" : database,
+            Username = username,
+            Password = password,
             SslMode = SslMode.Require,
         };
-
-        if (!string.IsNullOrEmpty(uri.Query))
-        {
-            var query = uri.Query.TrimStart('?');
-            foreach (var part in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
-            {
-                var kv = part.Split('=', 2);
-                if (kv.Length != 2)
-                    continue;
-                var key = Uri.UnescapeDataString(kv[0]);
-                var value = Uri.UnescapeDataString(kv[1]);
-                if (key.Equals("sslmode", StringComparison.OrdinalIgnoreCase)
-                    && Enum.TryParse<SslMode>(value, true, out var ssl))
-                {
-                    builder.SslMode = ssl;
-                }
-            }
-        }
 
         return builder.ConnectionString;
     }
@@ -86,8 +111,8 @@ public static class ConnectionStringNormalizer
         catch (Exception ex)
         {
             throw new InvalidOperationException(
-                "Supabase__ConnectionString is invalid. Use Host=db.xxx.supabase.co;Port=5432;Database=postgres;Username=postgres;Password=...;SSL Mode=Require;Trust Server Certificate=true " +
-                "or paste the postgresql:// URI from Supabase.",
+                "Supabase__ConnectionString is invalid. Use Host=db.xxx.supabase.co;Port=5432;Database=postgres;Username=postgres;Password=...;SSL Mode=Require " +
+                "or paste the postgresql:// URI from Supabase (URL-encode special characters in the password).",
                 ex);
         }
     }
