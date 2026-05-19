@@ -133,19 +133,28 @@ app.MapGet("/health", () => Results.Ok(new
     modules = new[] { "security", "housekeeping", "auth" },
 }));
 
-app.MapGet("/health/db", async (ApplicationDbContext db, CancellationToken ct) =>
+app.MapGet("/health/db", async (ApplicationDbContext db, IConfiguration config, CancellationToken ct) =>
 {
     try
     {
         if (!await db.Database.CanConnectAsync(ct))
-            return Results.Json(new { status = "error", message = "Cannot connect to database." }, statusCode: 503);
+        {
+            return Results.Json(new
+            {
+                status = "error",
+                message = "Cannot connect to database. Check Supabase__ConnectionString on Render and that the Supabase project is not paused.",
+                configured = !string.IsNullOrWhiteSpace(config["Supabase:ConnectionString"])
+                    || !string.IsNullOrWhiteSpace(config.GetConnectionString("DefaultConnection"))
+                    || !string.IsNullOrWhiteSpace(config["DATABASE_URL"]),
+            }, statusCode: 503);
+        }
 
         var userCount = await db.SecurityAppUsers.CountAsync(ct);
         return Results.Ok(new { status = "ok", securityAppUsers = userCount });
     }
     catch (Exception ex)
     {
-        return Results.Json(new { status = "error", message = ex.Message }, statusCode: 503);
+        return Results.Json(new { status = "error", message = ex.GetBaseException().Message }, statusCode: 503);
     }
 });
 app.MapGet("/", () => Results.Ok(new

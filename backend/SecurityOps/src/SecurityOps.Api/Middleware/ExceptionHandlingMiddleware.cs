@@ -61,7 +61,18 @@ public sealed class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Ex
                         $"Database error ({pg.SqlState}): {pg.MessageText}"),
                 };
             }
+
+            if (e is NpgsqlException npg)
+            {
+                return (
+                    HttpStatusCode.ServiceUnavailable,
+                    $"Database connection failed: {npg.Message}. Verify Supabase__ConnectionString on Render (use the full postgresql:// URI from Supabase → Database).");
+            }
         }
+
+        var detail = ex.GetBaseException().Message;
+        if (!string.IsNullOrWhiteSpace(detail) && detail.Length <= 300)
+            return (HttpStatusCode.InternalServerError, detail);
 
         return (HttpStatusCode.InternalServerError, "An unexpected error occurred. Check Render logs for details.");
     }
