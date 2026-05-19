@@ -12,19 +12,43 @@ function isLocalhostHost(hostname) {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
 }
 
+function isLocalhostOrigin(origin) {
+  try {
+    const host = new URL(origin).hostname;
+    return isLocalhostHost(host);
+  } catch {
+    return false;
+  }
+}
+
 function resolveEnvOrigin(envValue, fallbackPort) {
   const fromEnv = normalizeOrigin(envValue);
-  if (fromEnv) return fromEnv;
+  if (fromEnv) {
+    // Vercel/production must not use localhost even if env was copied from .env.example
+    if (
+      Platform.OS === 'web' &&
+      typeof globalThis !== 'undefined' &&
+      globalThis.location?.hostname &&
+      !isLocalhostHost(globalThis.location.hostname) &&
+      isLocalhostOrigin(fromEnv)
+    ) {
+      return null;
+    }
+    return fromEnv;
+  }
 
   if (Platform.OS === 'android') {
     return `http://10.0.2.2:${fallbackPort}`;
   }
 
-  if (Platform.OS === 'web' && typeof globalThis !== 'undefined' && globalThis.location?.hostname) {
-    const host = globalThis.location.hostname;
-    if (!isLocalhostHost(host)) {
-      return null;
+  if (Platform.OS === 'web') {
+    const host =
+      typeof globalThis !== 'undefined' ? globalThis.location?.hostname : null;
+    if (host && isLocalhostHost(host)) {
+      return `http://localhost:${fallbackPort}`;
     }
+    // Production web or static export build — require EXPO_PUBLIC_API_URL
+    return null;
   }
 
   return `http://localhost:${fallbackPort}`;
@@ -58,8 +82,15 @@ export function resolveApiOrigin() {
 export function getSecurityApiOrigin() {
   const origin = resolveSecurityApiOrigin();
   if (!origin) {
+    const onLiveWeb =
+      Platform.OS === 'web' &&
+      typeof globalThis !== 'undefined' &&
+      globalThis.location?.hostname &&
+      !isLocalhostHost(globalThis.location.hostname);
     throw new Error(
-      'Security API URL is not configured. Set EXPO_PUBLIC_SECURITY_API_URL or EXPO_PUBLIC_API_URL.',
+      onLiveWeb
+        ? 'API URL not configured for production. In Vercel set EXPO_PUBLIC_API_URL to https://godrejair.onrender.com and redeploy.'
+        : 'Security API URL is not configured. Set EXPO_PUBLIC_SECURITY_API_URL or EXPO_PUBLIC_API_URL.',
     );
   }
   return origin;

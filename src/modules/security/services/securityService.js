@@ -17,8 +17,10 @@ import { ensureValidAccessToken, forceRefreshAccessToken } from '../../shared/se
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
-/** @deprecated Prefer getApiOrigin() — may be localhost when env is missing at build time. */
-export const API_ORIGIN = resolveSecurityApiOrigin() ?? 'http://localhost:5115';
+/** Resolve at call time — do not cache; avoids baking localhost during Vercel builds. */
+export function getApiOriginForSecurity() {
+  return getSecurityApiOrigin();
+}
 
 function apiBase() {
   return `${getSecurityApiOrigin()}/api`;

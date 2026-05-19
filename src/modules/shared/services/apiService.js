@@ -5,15 +5,16 @@
  * This file keeps legacy call-sites working during migration.
  */
 import {
-  API_ORIGIN,
   fetchStaff,
   fetchMonthlyBilling,
   fetchSanctionedStrength,
   fetchSecurityRates,
 } from '../../security/services/securityService';
+import { getSecurityApiOrigin } from '../config/apiConfig';
 import { loginWithCredentials } from './authService';
 
-export { API_ORIGIN };
+/** @deprecated Use getSecurityApiOrigin() */
+export const API_ORIGIN = () => getSecurityApiOrigin();
 
 export const apiService = {
   login: (username, password) => loginWithCredentials(username, password),
