@@ -13,9 +13,15 @@ Do **not** use `backend/HousekeepingOps/Dockerfile` — that is legacy and has n
 
 ## Environment variables
 
-- `Supabase__ConnectionString`
-- `Jwt__SigningKey` (32+ characters)
-- `DOTNET_USE_POLLING_FILE_WATCHER` = `true` (set in Dockerfile; can add in dashboard too)
+| Key | Example |
+|-----|---------|
+| `Supabase__ConnectionString` | `Host=db.xxx.supabase.co;Port=5432;Database=postgres;Username=postgres;Password=YOUR_PASSWORD;SSL Mode=Require;Trust Server Certificate=true` |
+| `Jwt__SigningKey` | 32+ random characters |
+| `DOTNET_USE_POLLING_FILE_WATCHER` | `true` |
+
+Use **double underscore** `Supabase__ConnectionString` (not single underscore).
+
+In Supabase → SQL Editor, run migrations `009_security_app_users.sql` through `016_deployment_logs_module.sql`.
 
 ## Verify after deploy
 

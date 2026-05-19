@@ -6,7 +6,9 @@ using SecurityOps.Api.Auth;
 using SecurityOps.Api.Middleware;
 using SecurityOps.Application;
 using SecurityOps.Infrastructure;
+using SecurityOps.Infrastructure.Persistence;
 using Serilog;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -104,6 +106,7 @@ app.UseRouting();
 app.UseCors("AllowAll");
 
 app.UseSerilogRequestLogging();
+app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseMiddleware<ValidationExceptionMiddleware>();
 
 if (app.Environment.IsDevelopment())
@@ -129,6 +132,22 @@ app.MapGet("/health", () => Results.Ok(new
     service = "godrej-api",
     modules = new[] { "security", "housekeeping", "auth" },
 }));
+
+app.MapGet("/health/db", async (ApplicationDbContext db, CancellationToken ct) =>
+{
+    try
+    {
+        if (!await db.Database.CanConnectAsync(ct))
+            return Results.Json(new { status = "error", message = "Cannot connect to database." }, statusCode: 503);
+
+        var userCount = await db.SecurityAppUsers.CountAsync(ct);
+        return Results.Ok(new { status = "ok", securityAppUsers = userCount });
+    }
+    catch (Exception ex)
+    {
+        return Results.Json(new { status = "error", message = ex.Message }, statusCode: 503);
+    }
+});
 app.MapGet("/", () => Results.Ok(new
 {
     status = "healthy",

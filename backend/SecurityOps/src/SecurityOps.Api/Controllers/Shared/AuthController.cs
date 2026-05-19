@@ -95,7 +95,20 @@ public sealed class AuthController : ControllerBase
             .AsNoTracking()
             .FirstOrDefaultAsync(u => u.Username == username && u.IsActive, cancellationToken);
 
-        if (user is null || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
+        var passwordOk = false;
+        if (user is not null && !string.IsNullOrWhiteSpace(user.PasswordHash))
+        {
+            try
+            {
+                passwordOk = BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash);
+            }
+            catch
+            {
+                passwordOk = false;
+            }
+        }
+
+        if (user is null || !passwordOk)
             return Unauthorized(new { error = "Invalid username or password." });
 
         return Ok(await IssueTokenPairAsync(user, cancellationToken));
