@@ -14,14 +14,7 @@ public static class DependencyInjection
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        var supabase = configuration["Supabase:ConnectionString"];
-        var defaultCs = configuration.GetConnectionString("DefaultConnection");
-        var connectionString = !string.IsNullOrWhiteSpace(supabase)
-            ? supabase.Trim()
-            : defaultCs;
-        if (string.IsNullOrWhiteSpace(connectionString))
-            throw new InvalidOperationException(
-                "Configure a database connection: set Supabase:ConnectionString or ConnectionStrings:DefaultConnection.");
+        var connectionString = ConnectionStringNormalizer.Resolve(configuration);
 
         services.AddDbContext<ApplicationDbContext>(options =>
         {

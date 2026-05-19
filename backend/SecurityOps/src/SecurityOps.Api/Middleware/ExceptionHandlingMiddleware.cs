@@ -32,6 +32,20 @@ public sealed class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Ex
     {
         for (var e = ex; e is not null; e = e.InnerException)
         {
+            if (e is InvalidOperationException ioe
+                && ioe.Message.Contains("Supabase__ConnectionString", StringComparison.OrdinalIgnoreCase))
+            {
+                return (HttpStatusCode.ServiceUnavailable, ioe.Message);
+            }
+
+            if (e is ArgumentException arg
+                && arg.Message.Contains("initialization string", StringComparison.OrdinalIgnoreCase))
+            {
+                return (
+                    HttpStatusCode.ServiceUnavailable,
+                    "Invalid database connection string on Render. Set Supabase__ConnectionString to the Supabase URI (postgresql://...) or Host=...;Port=5432;... format.");
+            }
+
             if (e is PostgresException pg)
             {
                 return pg.SqlState switch

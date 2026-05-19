@@ -15,11 +15,25 @@ Do **not** use `backend/HousekeepingOps/Dockerfile` — that is legacy and has n
 
 | Key | Example |
 |-----|---------|
-| `Supabase__ConnectionString` | `Host=db.xxx.supabase.co;Port=5432;Database=postgres;Username=postgres;Password=YOUR_PASSWORD;SSL Mode=Require;Trust Server Certificate=true` |
+| `Supabase__ConnectionString` | See formats below |
 | `Jwt__SigningKey` | 32+ random characters |
 | `DOTNET_USE_POLLING_FILE_WATCHER` | `true` |
 
 Use **double underscore** `Supabase__ConnectionString` (not single underscore).
+
+**Option A — paste Supabase URI** (Project Settings → Database → Connection string → URI):
+
+```text
+postgresql://postgres.[ref]:YOUR_PASSWORD@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres
+```
+
+**Option B — Npgsql key=value format:**
+
+```text
+Host=db.xxx.supabase.co;Port=5432;Database=postgres;Username=postgres;Password=YOUR_PASSWORD;SSL Mode=Require;Trust Server Certificate=true
+```
+
+Do **not** paste only the password, project ref, or JSON — the full connection string is required.
 
 In Supabase → SQL Editor, run migrations `009_security_app_users.sql` through `016_deployment_logs_module.sql`.
 
