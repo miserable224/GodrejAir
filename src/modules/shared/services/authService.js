@@ -1,4 +1,4 @@
-import { getApiOrigin } from '../config/apiConfig';
+import { getApiOrigin, resolveSecurityApiOrigin } from '../config/apiConfig';
 import { fetchWithNetworkHint } from '../utils/networkError';
 import { loadStoredSession, saveStoredSession, clearStoredSession } from './authStorage';
 import {
@@ -14,8 +14,13 @@ function authBase() {
   return `${getApiOrigin()}/api/auth`;
 }
 
-const AUTH_NETWORK_HINT =
-  'Cannot reach the login API from this device. In Vercel, set EXPO_PUBLIC_API_URL to your HTTPS API URL and redeploy.';
+function authNetworkHint() {
+  const origin = resolveSecurityApiOrigin();
+  if (!origin) {
+    return 'Cannot reach the login API. In Vercel set EXPO_PUBLIC_API_URL to https://godrejair.onrender.com and redeploy.';
+  }
+  return `Cannot reach ${origin}/api/auth/login. If using Render free tier, wait 30–60s and try again.`;
+}
 
 function normalizeTokenResponse(data) {
   return {
@@ -55,7 +60,7 @@ export async function sendAdminOtp(email) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: email.trim().toLowerCase() }),
-  }, AUTH_NETWORK_HINT);
+  }, authNetworkHint());
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body?.error || 'Could not send OTP');
   return {
@@ -73,7 +78,7 @@ export async function verifyAdminOtp(email, otp, displayName) {
       otp: otp.trim(),
       displayName: displayName?.trim() || null,
     }),
-  }, AUTH_NETWORK_HINT);
+  }, authNetworkHint());
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body?.error || 'OTP verification failed');
 
@@ -93,7 +98,12 @@ export async function loginWithCredentials(username, password) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username: username.trim(), password }),
-  }, AUTH_NETWORK_HINT);
+  }, authNetworkHint());
+  if (res.status === 404) {
+    throw new Error(
+      'Login not found on this API. In Render use Dockerfile backend/SecurityOps/Dockerfile; /health must show godrej-api.',
+    );
+  }
   if (!res.ok) throw new Error(await parseAuthError(res));
   const data = normalizeTokenResponse(await res.json());
   if (!data.accessToken || !data.refreshToken) {
@@ -110,7 +120,7 @@ export async function refreshSession(refreshToken) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ refreshToken }),
-  }, AUTH_NETWORK_HINT);
+  }, authNetworkHint());
   if (!res.ok) throw new Error(await parseAuthError(res));
   const data = normalizeTokenResponse(await res.json());
   const prev = await loadStoredSession();
