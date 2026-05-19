@@ -10,4 +10,6 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 COPY --from=build /app/publish .
 ENV ASPNETCORE_ENVIRONMENT=Production
+# Render/containers: avoid inotify limit crash on appsettings file watchers
+ENV DOTNET_USE_POLLING_FILE_WATCHER=true
 ENTRYPOINT ["dotnet", "SecurityOps.Api.dll"]

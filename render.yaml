@@ -10,6 +10,8 @@ services:
     envVars:
       - key: ASPNETCORE_ENVIRONMENT
         value: Production
+      - key: DOTNET_USE_POLLING_FILE_WATCHER
+        value: "true"
       - key: Supabase__ConnectionString
         sync: false
       - key: Jwt__Issuer
