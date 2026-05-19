@@ -135,26 +135,27 @@ app.MapGet("/health", () => Results.Ok(new
 
 app.MapGet("/health/db", async (ApplicationDbContext db, IConfiguration config, CancellationToken ct) =>
 {
+    var configured = !string.IsNullOrWhiteSpace(config["Supabase:ConnectionString"])
+        || !string.IsNullOrWhiteSpace(config.GetConnectionString("DefaultConnection"))
+        || !string.IsNullOrWhiteSpace(config["DATABASE_URL"]);
+
     try
     {
-        if (!await db.Database.CanConnectAsync(ct))
-        {
-            return Results.Json(new
-            {
-                status = "error",
-                message = "Cannot connect to database. Check Supabase__ConnectionString on Render and that the Supabase project is not paused.",
-                configured = !string.IsNullOrWhiteSpace(config["Supabase:ConnectionString"])
-                    || !string.IsNullOrWhiteSpace(config.GetConnectionString("DefaultConnection"))
-                    || !string.IsNullOrWhiteSpace(config["DATABASE_URL"]),
-            }, statusCode: 503);
-        }
+        await db.Database.OpenConnectionAsync(ct);
+        await db.Database.CloseConnectionAsync();
 
         var userCount = await db.SecurityAppUsers.CountAsync(ct);
         return Results.Ok(new { status = "ok", securityAppUsers = userCount });
     }
     catch (Exception ex)
     {
-        return Results.Json(new { status = "error", message = ex.GetBaseException().Message }, statusCode: 503);
+        return Results.Json(new
+        {
+            status = "error",
+            configured,
+            message = ex.GetBaseException().Message,
+            hint = "Use Supabase Session pooler (port 6543) on Render if direct port 5432 fails.",
+        }, statusCode: 503);
     }
 });
 app.MapGet("/", () => Results.Ok(new
