@@ -60,6 +60,11 @@ builder.Services.AddSwaggerGen(c =>
             return new[] { "Security" };
         if (path.StartsWith("api/housekeeping", StringComparison.OrdinalIgnoreCase))
             return new[] { "Housekeeping" };
+        if (path.StartsWith("api/promotions", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith("api/promotion-types", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith("api/vendors", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith("api/upload-receipt", StringComparison.OrdinalIgnoreCase))
+            return new[] { "Promotions" };
         return new[] { "Shared" };
     });
     c.DocInclusionPredicate((_, _) => true);
@@ -130,7 +135,8 @@ app.MapGet("/health", () => Results.Ok(new
 {
     status = "healthy",
     service = "godrej-api",
-    modules = new[] { "security", "housekeeping", "auth" },
+    modules = new[] { "security", "housekeeping", "auth", "duty" },
+    dutyPing = "/api/security/duty/ping",
 }));
 
 app.MapGet("/health/db", async (ApplicationDbContext db, IConfiguration config, CancellationToken ct) =>

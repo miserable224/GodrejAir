@@ -254,10 +254,25 @@ export async function fetchSecurityDashboard(token, dateParams, signal) {
 
 // ─── Mutations ─────────────────────────────────────────────────────────────
 
+async function parseJsonResponse(res) {
+  if (res.status === 204) {
+    return { data: null, empty: true };
+  }
+  const text = await res.text();
+  if (!text || !text.trim()) {
+    return { data: null, empty: true };
+  }
+  try {
+    return { ...JSON.parse(text), empty: false };
+  } catch {
+    throw new Error(`Invalid JSON from server (${res.status})`);
+  }
+}
+
 async function readApiError(res, fallback) {
   let detail = fallback || res.statusText;
   try {
-    const body = await res.json();
+    const body = await parseJsonResponse(res);
     if (Array.isArray(body?.errors) && body.errors.length > 0) {
       return body.errors.join(' ');
     }
@@ -268,6 +283,27 @@ async function readApiError(res, fallback) {
     /* ignore */
   }
   return detail;
+}
+
+const DUTY_DEPLOY_MSG =
+  'Duty check-in/out is not on this server (404). Redeploy the latest API on Render from branch dev, run migrations 019–020, or use EXPO_PUBLIC_API_URL=http://localhost:5115 locally.';
+
+/** Call before check-in so photo upload is not wasted when API is old. */
+export async function assertDutyApiAvailable(token, signal) {
+  const accessToken = token || (await ensureValidAccessToken());
+  if (!accessToken) throw new AuthError('Not signed in');
+
+  const res = await fetchWithNetworkHint(`${apiBase()}/security/duty/ping`, {
+    method: 'GET',
+    signal,
+  }, apiNetworkHint());
+
+  if (res.status === 404) {
+    throw new Error(DUTY_DEPLOY_MSG);
+  }
+  if (!res.ok) {
+    throw new Error(`Duty API probe failed (${res.status}): ${await readApiError(res)}`);
+  }
 }
 
 function photoFileName(uri) {
@@ -453,6 +489,175 @@ export async function postBulkSecurityDeployments(token, dateIso, items, signal)
   invalidateSecurityCache();
   const body = await res.json();
   return body?.data ?? body;
+}
+
+function normalizeDutySession(row) {
+  if (!row) return null;
+  return {
+    id: row.id ?? row.Id,
+    staffId: row.staffId ?? row.StaffId ?? null,
+    staffName: row.staffName ?? row.StaffName ?? '',
+    locationId: row.locationId ?? row.LocationId ?? null,
+    locationName: row.locationName ?? row.LocationName ?? '',
+    designation: row.designation ?? row.Designation ?? null,
+    status: row.status ?? row.Status ?? 'open',
+    entryAt: row.entryAt ?? row.EntryAt,
+    exitAt: row.exitAt ?? row.ExitAt ?? null,
+    entryPhotoUrl: row.entryPhotoUrl ?? row.EntryPhotoUrl ?? null,
+    exitPhotoUrl: row.exitPhotoUrl ?? row.ExitPhotoUrl ?? null,
+    entryLatitude: row.entryLatitude ?? row.EntryLatitude ?? null,
+    entryLongitude: row.entryLongitude ?? row.EntryLongitude ?? null,
+    entryAccuracyMeters: row.entryAccuracyMeters ?? row.EntryAccuracyMeters ?? null,
+    exitLatitude: row.exitLatitude ?? row.ExitLatitude ?? null,
+    exitLongitude: row.exitLongitude ?? row.ExitLongitude ?? null,
+    entryShift: row.entryShift ?? row.EntryShift ?? null,
+    exitShift: row.exitShift ?? row.ExitShift ?? null,
+    entryShiftDisplay: row.entryShiftDisplay ?? row.EntryShiftDisplay ?? null,
+    exitShiftDisplay: row.exitShiftDisplay ?? row.ExitShiftDisplay ?? null,
+    entryCapturedAt: row.entryCapturedAt ?? row.EntryCapturedAt ?? null,
+    exitCapturedAt: row.exitCapturedAt ?? row.ExitCapturedAt ?? null,
+    durationMinutes: row.durationMinutes ?? row.DurationMinutes ?? null,
+    durationHours: row.durationHours ?? row.DurationHours ?? null,
+    durationLabel: row.durationLabel ?? row.DurationLabel ?? null,
+  };
+}
+
+export async function fetchOpenDutySession(token, staffName, signal) {
+  const q = encodeURIComponent((staffName || '').trim());
+  const res = await apiFetch(`/security/duty/open?staffName=${q}`, token, signal);
+  return normalizeDutySession(res.data);
+}
+
+export async function fetchOnDutySessions(token, signal) {
+  const res = await apiFetch('/security/duty/on-duty', token, signal);
+  const list = Array.isArray(res.data) ? res.data : [];
+  return list.map(normalizeDutySession);
+}
+
+export async function fetchDutySessions(token, { date, from, to, staffName, status } = {}, signal) {
+  const params = new URLSearchParams();
+  if (date) params.set('date', date);
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  if (staffName) params.set('staffName', staffName);
+  if (status) params.set('status', status);
+  const qs = params.toString();
+  const res = await apiFetch(`/security/duty/sessions${qs ? `?${qs}` : ''}`, token, signal);
+  const list = Array.isArray(res.data) ? res.data : [];
+  return list.map(normalizeDutySession);
+}
+
+/** Duty sessions for a calendar range (YYYY-MM-DD). */
+export async function fetchDutySessionsRange(token, { from, to }, signal) {
+  return fetchDutySessions(token, { from, to }, signal);
+}
+
+export async function postDutyCheckIn(token, payload, signal) {
+  const accessToken = token || (await ensureValidAccessToken());
+  if (!accessToken) throw new AuthError('Not signed in');
+
+  await assertDutyApiAvailable(accessToken, signal);
+
+  const { photo, staffName, locationName, designation, latitude, longitude, accuracy, capturedAt, entryAt } = payload;
+  if (!photo?.uri && !photo?.file) {
+    throw new Error('Check-in photo is required.');
+  }
+
+  const photoUrl = await uploadSecurityPhoto(accessToken, photo, signal);
+  if (!photoUrl) throw new Error('Photo upload succeeded but no URL was returned.');
+
+  const body = {
+    staffName: (staffName || '').trim(),
+    locationName: (locationName || '').trim(),
+    designation: designation?.trim() || null,
+    entryAt: capturedAt || entryAt || new Date().toISOString(),
+    latitude: latitude ?? null,
+    longitude: longitude ?? null,
+    accuracyMeters: accuracy ?? null,
+    capturedAt: capturedAt || entryAt || new Date().toISOString(),
+    photoUrls: [photoUrl],
+  };
+
+  const res = await fetchWithNetworkHint(`${apiBase()}/security/duty/check-in`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  }, apiNetworkHint());
+
+  if (res.status === 204) {
+    throw new Error(
+      'Check-in returned empty response (204). In DevTools, confirm you are looking at the POST row, not the OPTIONS preflight. Redeploy the API if POST is 404.',
+    );
+  }
+
+  if (!res.ok) {
+    const detail = await readApiError(res);
+    if (res.status === 404) {
+      throw new Error(DUTY_DEPLOY_MSG);
+    }
+    throw new Error(`Check-in failed (${res.status}): ${detail}`);
+  }
+
+  invalidateSecurityCache();
+  const json = await parseJsonResponse(res);
+  if (json.empty || json.data == null) {
+    throw new Error('Check-in succeeded but server returned no data. Redeploy the latest API.');
+  }
+  return normalizeDutySession(json.data);
+}
+
+export async function postDutyCheckOut(token, sessionId, payload, signal) {
+  const accessToken = token || (await ensureValidAccessToken());
+  if (!accessToken) throw new AuthError('Not signed in');
+
+  await assertDutyApiAvailable(accessToken, signal);
+
+  const { photo, latitude, longitude, accuracy, capturedAt, exitAt } = payload || {};
+  const photoUrls = [];
+  if (photo?.uri || photo?.file) {
+    const photoUrl = await uploadSecurityPhoto(accessToken, photo, signal);
+    if (photoUrl) photoUrls.push(photoUrl);
+  }
+
+  const body = {
+    exitAt: capturedAt || exitAt || new Date().toISOString(),
+    latitude: latitude ?? null,
+    longitude: longitude ?? null,
+    accuracyMeters: accuracy ?? null,
+    capturedAt: capturedAt || exitAt || new Date().toISOString(),
+    photoUrls,
+  };
+
+  const res = await fetchWithNetworkHint(
+    `${apiBase()}/security/duty/${sessionId}/check-out`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    },
+    apiNetworkHint(),
+  );
+
+  if (res.status === 204) {
+    throw new Error('Check-out returned empty response (204). Check the POST request, not OPTIONS.');
+  }
+
+  if (!res.ok) {
+    const detail = await readApiError(res);
+    if (res.status === 404) {
+      throw new Error(DUTY_DEPLOY_MSG);
+    }
+    throw new Error(`Check-out failed (${res.status}): ${detail}`);
+  }
+
+  invalidateSecurityCache();
+  const json = await parseJsonResponse(res);
+  if (json.empty || json.data == null) {
+    throw new Error('Check-out succeeded but server returned no data.');
+  }
+  return normalizeDutySession(json.data);
 }
 
 export async function postMobilePatrol(token, payload, signal) {
