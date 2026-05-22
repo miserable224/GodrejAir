@@ -24,10 +24,15 @@ import {
 } from '../../utils/geoPhoto';
 import {
   fetchOpenDutySession,
+  fetchOnDutySessions,
   fetchStaff,
   postDutyCheckIn,
   postDutyCheckOut,
 } from '../../modules/security/services/securityService';
+import {
+  filterNamesAvailableForCheckIn,
+  isStaffOnDuty,
+} from '../../modules/security/utils/dutyStaffOptions';
 import { ensureValidAccessToken } from '../../modules/shared/services/authService';
 
 const LOCATION_OPTIONS = [
@@ -75,6 +80,7 @@ export default function GuardDutyScreen({ navigation, route }) {
   const [photo, setPhoto] = useState(null);
   const [openSession, setOpenSession] = useState(null);
   const [roster, setRoster] = useState([]);
+  const [onDutySessions, setOnDutySessions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [locationPickerOpen, setLocationPickerOpen] = useState(false);
@@ -104,9 +110,15 @@ export default function GuardDutyScreen({ navigation, route }) {
       try {
         const accessToken = (await ensureValidAccessToken()) || token;
         if (accessToken) {
-          const staff = await fetchStaff(accessToken);
+          const [staff, onDuty] = await Promise.all([
+            fetchStaff(accessToken),
+            fetchOnDutySessions(accessToken),
+          ]);
           if (!cancelled && Array.isArray(staff)) {
             setRoster(staff.filter((s) => (s.isActive ?? s.IsActive) !== false));
+          }
+          if (!cancelled) {
+            setOnDutySessions(Array.isArray(onDuty) ? onDuty : []);
           }
         }
         if (!cancelled) await refreshOpenSession(staffName);
@@ -129,11 +141,28 @@ export default function GuardDutyScreen({ navigation, route }) {
     return [...new Set(names)];
   }, [roster, staffName]);
 
+  const checkInStaffOptions = useMemo(
+    () => filterNamesAvailableForCheckIn(rosterNames, onDutySessions),
+    [rosterNames, onDutySessions],
+  );
+
+  const staffPickerOptions =
+    dutyMode === 'check-in' && !isOnDuty
+      ? checkInStaffOptions
+      : rosterNames;
+
   const onCheckIn = async () => {
     const name = staffName.trim();
     const loc = locationName.trim();
     if (!name) {
       Alert.alert('Staff name', 'Enter or select your name.');
+      return;
+    }
+    if (isStaffOnDuty(name, onDutySessions)) {
+      Alert.alert(
+        'Already on duty',
+        `${name} is already checked in. Check out before a new check-in.`,
+      );
       return;
     }
     if (!loc) {
@@ -165,6 +194,8 @@ export default function GuardDutyScreen({ navigation, route }) {
       });
       setOpenSession(session);
       setPhoto(null);
+      const onDuty = await fetchOnDutySessions(accessToken);
+      setOnDutySessions(Array.isArray(onDuty) ? onDuty : []);
       Alert.alert('Checked in', `On duty at ${loc} since ${formatTime(session.entryAt)}.`);
     } catch (err) {
       Alert.alert('Check-in failed', err?.message || 'Could not save check-in.');
@@ -266,7 +297,16 @@ export default function GuardDutyScreen({ navigation, route }) {
           <Text style={styles.label}>Guard name</Text>
           <TouchableOpacity
             style={styles.pickerBtn}
-            onPress={() => setStaffPickerOpen(true)}
+            onPress={() => {
+              if (dutyMode === 'check-in' && !isOnDuty && checkInStaffOptions.length === 0) {
+                Alert.alert(
+                  'Everyone on duty',
+                  'All guards are already checked in. Check someone out first.',
+                );
+                return;
+              }
+              setStaffPickerOpen(true);
+            }}
             activeOpacity={0.85}
           >
             <Text style={styles.pickerBtnText}>{staffName || 'Select guard'}</Text>
@@ -386,7 +426,13 @@ export default function GuardDutyScreen({ navigation, route }) {
       <PickerModal
         visible={staffPickerOpen}
         title="Select guard"
-        options={rosterNames.length ? rosterNames : [staffName || 'Guard']}
+        options={
+          staffPickerOptions.length
+            ? staffPickerOptions
+            : dutyMode === 'check-in' && !isOnDuty
+              ? []
+              : [staffName || 'Guard']
+        }
         onSelect={(v) => {
           setStaffName(v);
           setStaffPickerOpen(false);

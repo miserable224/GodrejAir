@@ -58,6 +58,24 @@ import { ExpenseRecordForm } from '../../components/ExpensesFormModals';
 import { computeWaterDashboard } from '../../utils/waterMetrics';
 import AttendanceRoleRow from '../../components/AttendanceRoleRow';
 import ModulePhotoSection from '../../components/ModulePhotoSection';
+import SecurityDutyDayGrid from '../../components/SecurityDutyDayGrid';
+import SecurityShiftShortageBar, {
+  computeSecurityShiftShortage,
+} from '../../components/SecurityShiftShortageBar';
+import SecurityDeploymentBillingPanel, {
+  SECURITY_DEPLOY_DATE_PRESETS,
+} from '../../components/SecurityDeploymentBillingPanel';
+import HousekeepingDeploymentBillingPanel, {
+  HK_DEPLOY_DATE_PRESETS,
+} from '../../components/HousekeepingDeploymentBillingPanel';
+import BottomPickerSheet from '../../components/BottomPickerSheet';
+
+const SECURITY_DEPLOY_RANGE_MAP = {
+  today: 'Today',
+  week: 'Last 1 Week',
+  month: 'Last 1 Month',
+  custom: 'Custom Range',
+};
 import {
   formatGeoCaption,
   locationLabelFromPhoto,
@@ -89,18 +107,19 @@ import {
   postDutyCheckIn,
   postDutyCheckOut,
   fetchOpenDutySession,
-  fetchDutySessionsRange,
   fetchOnDutySessions,
-  formatDutyDurationMinutes,
-  formatDutyTime,
-  aggregateHoursByStaff,
+  fetchDutySessionsRange,
   resolveSecurityDateParams,
+  formatDutyDurationMinutes,
   postMobilePatrol,
   postStaffMember,
   useSecurityData,
   applyDeploymentEntriesToCounts,
   normalizeRoleKey,
+  filterNamesAvailableForCheckIn,
+  isStaffOnDuty,
 } from '../../modules/security';
+import { sessionMatchesShift } from '../../modules/security/utils/dutyShiftFilter';
 import {
   mergeHkDeploymentOverlay,
   useHousekeepingData,
@@ -108,8 +127,8 @@ import {
   postHkDutyCheckIn,
   postHkDutyCheckOut,
   fetchOpenHkDutySession,
-  fetchHkDutySessionsRange,
   fetchOnDutyHkSessions,
+  fetchHkDutySessionsRange,
   resolveWorkforceDateParams,
 } from '../../modules/housekeeping';
 import { SEC, SEC_FONTS, SEC_PLACEHOLDER } from '../../constants/securityTheme';
@@ -589,13 +608,14 @@ export default function AdminDashboardScreen({ navigation, route }) {
   const [waterVendorOpen, setWaterVendorOpen] = useState(false);
   const [recordExpenseOpen, setRecordExpenseOpen] = useState(false);
   const [recordPatrolOpen, setRecordPatrolOpen] = useState(false);
-  const [securityDateRange, setSecurityDateRange] = useState('Today');
-  const [showSecurityDateMenu, setShowSecurityDateMenu] = useState(false);
-  const [showHkDateMenu, setShowHkDateMenu] = useState(false);
-  /** Housekeeping date filter (Today / week / month / custom). */
-  const [staffTimePreset, setStaffTimePreset] = useState('today');
-  const [staffDateRange, setStaffDateRange] = useState({ from: '', to: '' });
-  const [customRange, setCustomRange] = useState({ from: '', to: '' });
+  const [securityDeployDatePreset, setSecurityDeployDatePreset] = useState('today');
+  const [securityDeployCustomRange, setSecurityDeployCustomRange] = useState({ from: '', to: '' });
+  const [securityDeployDateMenuOpen, setSecurityDeployDateMenuOpen] = useState(false);
+  const [hkDeployDatePreset, setHkDeployDatePreset] = useState('today');
+  const [hkDeployCustomRange, setHkDeployCustomRange] = useState({ from: '', to: '' });
+  const [hkDeployDateMenuOpen, setHkDeployDateMenuOpen] = useState(false);
+  const [hkDutyGridOpen, setHkDutyGridOpen] = useState(false);
+  const [hkDeploymentOpen, setHkDeploymentOpen] = useState(false);
   const {
     staffCounts: securityStaffCounts,
     setStaffCounts: setSecurityStaffCounts,
@@ -611,159 +631,123 @@ export default function AdminDashboardScreen({ navigation, route }) {
     refresh: refreshSecurityData,
   } = useSecurityData({
     token,
-    dateRange: securityDateRange,
-    customRange,
-    // Only fetch security APIs when the Security card is expanded (not on dashboard mount).
-    enabled: expandedId === 'Security' && (permissions?.canSeeModule('Security') ?? true),
+    dateRange: SECURITY_DEPLOY_RANGE_MAP[securityDeployDatePreset] ?? 'Today',
+    customRange: securityDeployCustomRange,
+    enabled: (permissions?.canSeeModule('Security') ?? true),
   });
 
-  const [dutySessions, setDutySessions] = useState([]);
-  const [dutySessionsLoading, setDutySessionsLoading] = useState(false);
-  const [dutySessionsTick, setDutySessionsTick] = useState(0);
+  const [onDutySessions, setOnDutySessions] = useState([]);
+  const [onDutyHkSessions, setOnDutyHkSessions] = useState([]);
+  const [onDutyLoading, setOnDutyLoading] = useState(false);
+  const [onDutyHkLoading, setOnDutyHkLoading] = useState(false);
+  const [securityDaySessions, setSecurityDaySessions] = useState([]);
+  const [securityDayLoading, setSecurityDayLoading] = useState(false);
+  const [securityDutyGridOpen, setSecurityDutyGridOpen] = useState(false);
+  const [securityDeploymentOpen, setSecurityDeploymentOpen] = useState(false);
+  const [hkDaySessions, setHkDaySessions] = useState([]);
+  const [hkDayLoading, setHkDayLoading] = useState(false);
+  const [activeHkShift, setActiveHkShift] = useState(1);
 
-  const dutyDateParams = useMemo(
-    () => resolveSecurityDateParams(securityDateRange, customRange),
-    [securityDateRange, customRange.from, customRange.to],
-  );
-
-  const dutyHoursByStaff = useMemo(
-    () => aggregateHoursByStaff(dutySessions),
-    [dutySessions, dutySessionsTick],
-  );
-
-  const displayDutyDuration = useCallback((session) => {
-    if (session.status === 'open' && session.entryAt) {
-      const mins = Math.max(
-        0,
-        Math.round((Date.now() - new Date(session.entryAt).getTime()) / 60000),
-      );
-      return `${formatDutyDurationMinutes(mins)} · on duty`;
-    }
-    return session.durationLabel || formatDutyDurationMinutes(session.durationMinutes);
-  }, [dutySessionsTick]);
-
-  useEffect(() => {
-    if (expandedId !== 'Security' || !token || !dutyDateParams.valid) {
-      setDutySessions([]);
-      return undefined;
-    }
-
-    let cancelled = false;
-    (async () => {
-      setDutySessionsLoading(true);
-      try {
-        const accessToken = (await ensureValidAccessToken()) || token;
-        if (!accessToken || cancelled) return;
-        const list = await fetchDutySessionsRange(accessToken, {
-          from: dutyDateParams.from,
-          to: dutyDateParams.to,
-        });
-        if (!cancelled) setDutySessions(list);
-      } catch (err) {
-        if (!cancelled) {
-          console.warn('Duty sessions load:', err?.message);
-          setDutySessions([]);
+  const loadOnDutyForSection = useCallback(
+    async (sectionId) => {
+      if (!token) return;
+      const accessToken = (await ensureValidAccessToken()) || token;
+      if (!accessToken) return;
+      if (sectionId === 'Security') {
+        setOnDutyLoading(true);
+        try {
+          const list = await fetchOnDutySessions(accessToken);
+          setOnDutySessions(Array.isArray(list) ? list : []);
+        } catch (err) {
+          console.warn('On-duty security load:', err?.message);
+          setOnDutySessions([]);
+        } finally {
+          setOnDutyLoading(false);
         }
-      } finally {
-        if (!cancelled) setDutySessionsLoading(false);
+      } else if (sectionId === 'Workforce') {
+        setOnDutyHkLoading(true);
+        try {
+          const list = await fetchOnDutyHkSessions(accessToken);
+          setOnDutyHkSessions(Array.isArray(list) ? list : []);
+        } catch (err) {
+          console.warn('On-duty HK load:', err?.message);
+          setOnDutyHkSessions([]);
+        } finally {
+          setOnDutyHkLoading(false);
+        }
       }
-    })();
+    },
+    [token],
+  );
 
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    expandedId,
-    token,
-    dutyDateParams.from,
-    dutyDateParams.to,
-    dutyDateParams.valid,
-    dutySessionsTick,
-  ]);
+  const loadSecurityDayBoard = useCallback(async () => {
+    if (!token) return;
+    setSecurityDayLoading(true);
+    try {
+      const accessToken = (await ensureValidAccessToken()) || token;
+      if (!accessToken) return;
+      const params = resolveSecurityDateParams('Today', {});
+      const list = await fetchDutySessionsRange(accessToken, {
+        from: params.from,
+        to: params.to,
+      });
+      setSecurityDaySessions(Array.isArray(list) ? list : []);
+    } catch (err) {
+      console.warn('Security day board:', err?.message);
+      setSecurityDaySessions([]);
+    } finally {
+      setSecurityDayLoading(false);
+    }
+  }, [token]);
+
+  const loadHkDayBoard = useCallback(async () => {
+    if (!token) return;
+    setHkDayLoading(true);
+    try {
+      const accessToken = (await ensureValidAccessToken()) || token;
+      if (!accessToken) return;
+      const params = resolveWorkforceDateParams('today', {});
+      if (!params.valid) {
+        setHkDaySessions([]);
+        return;
+      }
+      const list = await fetchHkDutySessionsRange(accessToken, {
+        from: params.from,
+        to: params.to,
+      });
+      setHkDaySessions(Array.isArray(list) ? list : []);
+    } catch (err) {
+      console.warn('HK day board:', err?.message);
+      setHkDaySessions([]);
+    } finally {
+      setHkDayLoading(false);
+    }
+  }, [token]);
 
   useEffect(() => {
-    if (expandedId !== 'Security') return undefined;
-    const hasOpen = dutySessions.some((s) => s.status === 'open');
-    if (!hasOpen) return undefined;
-    const id = setInterval(() => setDutySessionsTick((t) => t + 1), 60000);
-    return () => clearInterval(id);
-  }, [expandedId, dutySessions]);
+    if (expandedId === 'Security') {
+      loadOnDutyForSection('Security');
+    } else if (expandedId === 'Workforce') {
+      loadOnDutyForSection('Workforce');
+    }
+  }, [expandedId, loadOnDutyForSection]);
 
-  const [hkDutySessions, setHkDutySessions] = useState([]);
-  const [hkDutySessionsLoading, setHkDutySessionsLoading] = useState(false);
-  const [hkDutySessionsTick, setHkDutySessionsTick] = useState(0);
+  useEffect(() => {
+    if (expandedId === 'Security' && securityDutyGridOpen) {
+      loadSecurityDayBoard();
+    }
+  }, [expandedId, securityDutyGridOpen, loadSecurityDayBoard]);
+
+  useEffect(() => {
+    if (expandedId === 'Workforce' && hkDutyGridOpen) {
+      loadHkDayBoard();
+    }
+  }, [expandedId, hkDutyGridOpen, loadHkDayBoard]);
+
   const [hkDutyModal, setHkDutyModal] = useState(null);
   const [hkCheckoutSessionId, setHkCheckoutSessionId] = useState(null);
   const [isSavingHkDuty, setIsSavingHkDuty] = useState(false);
   const [committedHkEntries, setCommittedHkEntries] = useState([]);
-
-  const hkDutyDateParams = useMemo(
-    () => resolveWorkforceDateParams(staffTimePreset, staffDateRange),
-    [staffTimePreset, staffDateRange.from, staffDateRange.to],
-  );
-
-  const hkDutyHoursByStaff = useMemo(
-    () => aggregateHoursByStaff(hkDutySessions),
-    [hkDutySessions, hkDutySessionsTick],
-  );
-
-  const displayHkDutyDuration = useCallback((session) => {
-    if (session.status === 'open' && session.entryAt) {
-      const mins = Math.max(
-        0,
-        Math.round((Date.now() - new Date(session.entryAt).getTime()) / 60000),
-      );
-      return `${formatDutyDurationMinutes(mins)} · on duty`;
-    }
-    return session.durationLabel || formatDutyDurationMinutes(session.durationMinutes);
-  }, [hkDutySessionsTick]);
-
-  useEffect(() => {
-    if (expandedId !== 'Workforce' || !token || !hkDutyDateParams.valid) {
-      setHkDutySessions([]);
-      return undefined;
-    }
-
-    let cancelled = false;
-    (async () => {
-      setHkDutySessionsLoading(true);
-      try {
-        const accessToken = (await ensureValidAccessToken()) || token;
-        if (!accessToken || cancelled) return;
-        const list = await fetchHkDutySessionsRange(accessToken, {
-          from: hkDutyDateParams.from,
-          to: hkDutyDateParams.to,
-        });
-        if (!cancelled) setHkDutySessions(list);
-      } catch (err) {
-        if (!cancelled) {
-          console.warn('HK duty sessions load:', err?.message);
-          setHkDutySessions([]);
-        }
-      } finally {
-        if (!cancelled) setHkDutySessionsLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    expandedId,
-    token,
-    hkDutyDateParams.from,
-    hkDutyDateParams.to,
-    hkDutyDateParams.valid,
-    hkDutySessionsTick,
-  ]);
-
-  useEffect(() => {
-    if (expandedId !== 'Workforce') return undefined;
-    const hasOpen = hkDutySessions.some((s) => s.status === 'open');
-    if (!hasOpen) return undefined;
-    const id = setInterval(() => setHkDutySessionsTick((t) => t + 1), 60000);
-    return () => clearInterval(id);
-  }, [expandedId, hkDutySessions]);
 
   useEffect(() => {
     if (!expandedId) return;
@@ -773,17 +757,39 @@ export default function AdminDashboardScreen({ navigation, route }) {
 
   useFocusEffect(
     useCallback(() => {
-      const action = route.params?.settingsAction;
-      if (!action) return;
+      if (route.params?.expandSecurityDeployment) {
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        setExpandedId('Security');
+        setSecurityDeploymentOpen(true);
+        navigation.setParams({ expandSecurityDeployment: undefined });
+      }
 
+      if (route.params?.expandHousekeepingDeployment) {
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        setExpandedId('Workforce');
+        setHkDeploymentOpen(true);
+        navigation.setParams({ expandHousekeepingDeployment: undefined });
+      }
+
+      const action = route.params?.settingsAction;
       if (action === 'recordPatrol' && isModuleVisible('Security', user?.apiRole)) {
         LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
         setExpandedId('Security');
         setRecordPatrolOpen(true);
+        navigation.setParams({ settingsAction: undefined });
+        return;
       }
 
-      navigation.setParams({ settingsAction: undefined });
-    }, [route.params?.settingsAction, navigation, user?.apiRole]),
+      if (action) {
+        navigation.setParams({ settingsAction: undefined });
+      }
+    }, [
+      route.params?.expandSecurityDeployment,
+      route.params?.expandHousekeepingDeployment,
+      route.params?.settingsAction,
+      navigation,
+      user?.apiRole,
+    ]),
   );
 
   /** 'check-in' | 'check-out' — shared deployment-style form modal */
@@ -912,6 +918,11 @@ export default function AdminDashboardScreen({ navigation, route }) {
     );
   }, [staffCounts, committedSecurityEntries]);
 
+  const securityShiftShortage = useMemo(
+    () => computeSecurityShiftShortage(securityRoleDisplayRows),
+    [securityRoleDisplayRows],
+  );
+
   const {
     dashboard: hkDashboard,
     roleRows: hkApiRoleRows,
@@ -921,18 +932,59 @@ export default function AdminDashboardScreen({ navigation, route }) {
     refresh: refreshHkData,
   } = useHousekeepingData({
     token,
-    staffTimePreset,
-    staffDateRange,
-    enabled: expandedId === 'Workforce' && (permissions?.canSeeModule('Workforce') ?? true),
+    staffTimePreset: hkDeployDatePreset,
+    staffDateRange: hkDeployCustomRange,
+    enabled: permissions?.canSeeModule('Workforce') ?? true,
   });
 
   const hkRoleDisplayRows = useMemo(() => {
     if (committedHkEntries.length) return mergeHkDeploymentOverlay(hkApiRoleRows, committedHkEntries);
     return hkApiRoleRows;
   }, [hkApiRoleRows, committedHkEntries]);
+
+  const hkShiftShortage = useMemo(
+    () => computeSecurityShiftShortage(hkRoleDisplayRows),
+    [hkRoleDisplayRows],
+  );
   const [activeShift, setActiveShift] = useState(1); // 1 or 2
-  const [fmHkExpanded, setFmHkExpanded] = useState(false);
-  const [securityExpanded, setSecurityExpanded] = useState(false);
+
+  const securityGridSessions = useMemo(() => {
+    const byId = new Map();
+    for (const s of securityDaySessions) {
+      if (sessionMatchesShift(s, activeShift) && s.id) byId.set(s.id, s);
+    }
+    for (const s of onDutySessions) {
+      if (sessionMatchesShift(s, activeShift) && s.id && !byId.has(s.id)) {
+        byId.set(s.id, s);
+      }
+    }
+    return [...byId.values()];
+  }, [securityDaySessions, onDutySessions, activeShift]);
+
+  const hkGridSessions = useMemo(() => {
+    const byId = new Map();
+    for (const s of hkDaySessions) {
+      if (sessionMatchesShift(s, activeHkShift) && s.id) byId.set(s.id, s);
+    }
+    for (const s of onDutyHkSessions) {
+      if (sessionMatchesShift(s, activeHkShift) && s.id && !byId.has(s.id)) {
+        byId.set(s.id, s);
+      }
+    }
+    return [...byId.values()];
+  }, [hkDaySessions, onDutyHkSessions, activeHkShift]);
+
+  useEffect(() => {
+    if (expandedId !== 'Security') {
+      setSecurityDutyGridOpen(false);
+      setSecurityDeploymentOpen(false);
+    }
+    if (expandedId !== 'Workforce') {
+      setHkDutyGridOpen(false);
+      setHkDeploymentOpen(false);
+    }
+  }, [expandedId]);
+
   const [staffAttendancePhoto, setStaffAttendancePhoto] = useState(null);
   const [deploymentForm, setDeploymentForm] = useState({
     designation: '',
@@ -970,20 +1022,24 @@ export default function AdminDashboardScreen({ navigation, route }) {
   }, [committedSecurityEntries]);
 
   const checkoutNameOptions = useMemo(() => {
-    const names = dutySessions
-      .filter((s) => s.status === 'open')
-      .map((s) => s.staffName?.trim())
-      .filter(Boolean);
+    const names = onDutySessions.map((s) => s.staffName?.trim()).filter(Boolean);
     return [...new Set(names)].sort((a, b) => a.localeCompare(b));
-  }, [dutySessions]);
+  }, [onDutySessions]);
 
   const hkCheckoutNameOptions = useMemo(() => {
-    const names = hkDutySessions
-      .filter((s) => s.status === 'open')
-      .map((s) => s.staffName?.trim())
-      .filter(Boolean);
+    const names = onDutyHkSessions.map((s) => s.staffName?.trim()).filter(Boolean);
     return [...new Set(names)].sort((a, b) => a.localeCompare(b));
-  }, [hkDutySessions]);
+  }, [onDutyHkSessions]);
+
+  const securityCheckInNameOptions = useMemo(
+    () => filterNamesAvailableForCheckIn(staffNameOptions, onDutySessions),
+    [staffNameOptions, onDutySessions],
+  );
+
+  const hkCheckInNameOptions = useMemo(
+    () => filterNamesAvailableForCheckIn(staffNameOptions, onDutyHkSessions),
+    [staffNameOptions, onDutyHkSessions],
+  );
 
   const deploymentPickerOptions = useMemo(() => {
     if (deploymentPickerOpen === 'designation') return designationOptions;
@@ -991,6 +1047,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
     if (deploymentPickerOpen === 'name') {
       if (securityDutyModal === 'check-out') return checkoutNameOptions;
       if (hkDutyModal === 'check-out') return hkCheckoutNameOptions;
+      if (securityDutyModal === 'check-in') return securityCheckInNameOptions;
+      if (hkDutyModal === 'check-in') return hkCheckInNameOptions;
       return staffNameOptions;
     }
     return [];
@@ -1002,6 +1060,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
     hkDutyModal,
     checkoutNameOptions,
     hkCheckoutNameOptions,
+    securityCheckInNameOptions,
+    hkCheckInNameOptions,
   ]);
 
   const activePickerField =
@@ -1014,71 +1074,6 @@ export default function AdminDashboardScreen({ navigation, route }) {
     recordPatrolOpen && patrolPickerOpen
       ? patrolStaffNameOptions
       : deploymentPickerOptions;
-
-  // Mock history for 5 days
-  const [attendanceHistory, setAttendanceHistory] = useState([
-    { date: '2026-05-11', category: 'FM_HK', totalActual: 41, totalExpected: 44, penalty: 0 },
-    { date: '2026-05-11', category: 'Security', totalActual: 18, totalExpected: 18, penalty: 0 },
-    { date: '2026-05-10', category: 'FM_HK', totalActual: 40, totalExpected: 44, penalty: 1 },
-    { date: '2026-05-10', category: 'Security', totalActual: 17, totalExpected: 18, penalty: 0 },
-    { date: '2026-05-09', category: 'FM_HK', totalActual: 38, totalExpected: 44, penalty: 2 },
-    { date: '2026-05-09', category: 'Security', totalActual: 18, totalExpected: 18, penalty: 0 },
-  ]);
-
-  const workforceFiltered = useMemo(() => {
-    const now = new Date();
-    let periodLabel = '';
-    let historySlice = [];
-
-    if (staffTimePreset === 'today') {
-      periodLabel = `Today · ${shortenDateLabel(now)} ${now.getFullYear()}`;
-      return { displayCounts: staffCounts, periodLabel };
-    }
-
-    if (staffTimePreset === 'week') {
-      const wm = startOfWeekMonday(now);
-      const ws = endOfWeekSunday(wm);
-      const fromIso = toYMD(wm);
-      const toIso = toYMD(ws);
-      periodLabel = `This week · ${shortenDateLabel(wm)} – ${shortenDateLabel(ws)}`;
-      historySlice = attendanceHistory.filter(
-        (h) => h.date >= fromIso && h.date <= toIso
-      );
-    } else if (staffTimePreset === 'month') {
-      const y = now.getFullYear();
-      const m = pad2(now.getMonth() + 1);
-      const pref = `${y}-${m}`;
-      historySlice = attendanceHistory.filter((h) => h.date.startsWith(pref));
-      periodLabel = `This month · ${now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}`;
-    } else {
-      const df = parseDMYInput(staffDateRange.from);
-      const dt = parseDMYInput(staffDateRange.to);
-      if (df && dt && dt >= df) {
-        const fromIso = toYMD(df);
-        const toIso = toYMD(dt);
-        periodLabel = `Custom · ${shortenDateLabel(df)} – ${shortenDateLabel(dt)} ${dt.getFullYear()}`;
-        historySlice = attendanceHistory.filter(
-          (h) => h.date >= fromIso && h.date <= toIso
-        );
-      } else {
-        periodLabel =
-          df || dt ? 'Custom · enter From and To (DD/MM/YYYY)' : 'Custom · Set date range';
-        historySlice = [];
-      }
-    }
-
-    if (!historySlice.length && staffTimePreset !== 'today') {
-      return {
-        displayCounts: staffCounts,
-        periodLabel: `${periodLabel} · Showing live snapshot`,
-      };
-    }
-
-    const fmRatio = avgCategoryRatio(historySlice, 'FM_HK');
-    const secRatio = avgCategoryRatio(historySlice, 'Security');
-    const displayCounts = applyCategoryRatios(staffCounts, fmRatio, secRatio);
-    return { displayCounts, periodLabel };
-  }, [staffTimePreset, staffDateRange.from, staffDateRange.to, staffCounts, attendanceHistory]);
 
   const parseDateSafe = (value) => {
     const d = new Date(value);
@@ -1625,7 +1620,10 @@ export default function AdminDashboardScreen({ navigation, route }) {
       return { hint: 'Reservoirs, meters & usage trends', icon: 'analytics-outline' };
     }
     if (section.id === 'Workforce') {
-      return { hint: 'Check in/out · hours on site · roster', icon: 'clipboard-outline' };
+      return { hint: 'Check in/out below · expand for shortage & board', icon: 'sparkles-outline' };
+    }
+    if (section.id === 'Security') {
+      return { hint: 'Check in/out below · expand for shortage & board', icon: 'shield-checkmark-outline' };
     }
     if (section.id === 'Expenses') {
       return { hint: 'AMC, utilities & society spend', icon: 'pie-chart-outline' };
@@ -1718,643 +1716,217 @@ export default function AdminDashboardScreen({ navigation, route }) {
     </View>
   );
 
-  const HK_DATE_PRESETS = [
-    { key: 'today', label: 'Today' },
-    { key: 'week', label: 'This week' },
-    { key: 'month', label: 'This month' },
-    { key: 'custom', label: 'Custom' },
-  ];
-
-  const renderCollapsedDutyQuickActions = (onCheckIn, onCheckOut) => (
-    <View style={styles.collapsedDutyWrap}>
-      <TouchableOpacity
-        style={[styles.hubBtn, styles.hubBtnDuty, styles.collapsedDutyBtn]}
-        onPress={onCheckIn}
-        activeOpacity={0.85}
-      >
-        <Ionicons name="log-in-outline" size={16} color="#93C5FD" />
-        <Text style={styles.hubBtnTextDuty}>Check in</Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={[styles.hubBtn, styles.hubBtnDutyOut, styles.collapsedDutyBtn]}
-        onPress={onCheckOut}
-        activeOpacity={0.85}
-      >
-        <Ionicons name="log-out-outline" size={16} color="#FCA5A5" />
-        <Text style={styles.hubBtnTextDutyOut}>Check out</Text>
-      </TouchableOpacity>
+  const renderCollapsedDutyActions = (onCheckIn, onCheckOut) => (
+    <View style={styles.securityCollapsedSummary}>
+      <View style={[styles.hubActionRow, styles.hubActionRowCollapsed]}>
+        <TouchableOpacity
+          style={[styles.hubBtn, styles.hubBtnDuty]}
+          onPress={onCheckIn}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="log-in-outline" size={16} color="#93C5FD" />
+          <Text style={styles.hubBtnTextDuty}>Check in</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.hubBtn, styles.hubBtnDutyOut]}
+          onPress={onCheckOut}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="log-out-outline" size={16} color="#FCA5A5" />
+          <Text style={styles.hubBtnTextDutyOut}>Check out</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 
-  const renderWorkforceDetails = () => {
-    const fmHkStaff = hkRoleDisplayRows;
-    const hkOverlay = committedHkEntries;
+  const renderHkCollapsedSummary = () =>
+    renderCollapsedDutyActions(
+      () => openHkDutyModal('check-in'),
+      () => openHkDutyModal('check-out'),
+    );
 
-    const dailyTotal =
-      hkDashboard?.totalDeployed ??
-      fmHkStaff.reduce((s, c) => s + c.actualS1 + c.actualS2, 0);
-    const dailyExpected =
-      hkDashboard?.totalRequired ??
-      fmHkStaff.reduce((s, c) => s + c.expected * 2, 0);
-    const dailyShortage =
-      hkDashboard?.totalShortage ?? Math.max(0, dailyExpected - dailyTotal);
-    const headcountOk = dailyShortage === 0 && dailyExpected > 0;
+  const renderHousekeepingDetails = () => (
+    <View style={styles.securityExpandedShell}>
+      <View style={styles.premiumSecurityCard}>
+        <View style={styles.securityBody}>
+          {isHkLoading ? (
+            <ActivityIndicator size="small" color={HK.teal} style={styles.securityLoader} />
+          ) : (
+            <SecurityShiftShortageBar metrics={hkShiftShortage} />
+          )}
 
-    const wages = Number(hkDashboard?.estimatedWages ?? 0);
-    const hkBillHeadline = wages > 0 ? formatINR(wages) : '---';
-
-    const hkDateLabel =
-      HK_DATE_PRESETS.find((o) => o.key === staffTimePreset)?.label ?? 'Today';
-
-    return (
-      <View style={styles.securityExpandedShell}>
-        <View style={styles.premiumSecurityCard}>
-          <LinearGradient
-            colors={SEC.headerGradient}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.securityPremiumHeader}
+          <Pressable
+            style={styles.dutyGridAccordion}
+            onPress={() => {
+              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+              setHkDutyGridOpen((o) => !o);
+            }}
           >
-            <View style={styles.securityHeaderContent}>
-              <View style={styles.securityHeaderLeft}>
-                <Text style={styles.securityPremiumTitle}>Housekeeping</Text>
-                <TouchableOpacity
-                  style={styles.hkFullScreenDutyLink}
-                  onPress={() => navigation.navigate('HkDuty')}
-                  hitSlop={8}
-                >
-                  <Ionicons name="expand-outline" size={16} color={SEC.gold} />
-                  <Text style={styles.hkFullScreenDutyLinkText}>Full screen</Text>
-                </TouchableOpacity>
-              </View>
-              <View style={styles.securityHeaderRight}>
-                <TouchableOpacity
-                  style={[
-                    styles.securityPremiumDropdown,
-                    showHkDateMenu && styles.securityPremiumDropdownActive,
-                  ]}
-                  onPress={() => setShowHkDateMenu(!showHkDateMenu)}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name="calendar-outline" size={15} color={SEC.gold} />
-                  <Text style={styles.securityPremiumDateText}>{hkDateLabel}</Text>
-                  <Ionicons
-                    name={showHkDateMenu ? 'chevron-up' : 'chevron-down'}
-                    size={14}
-                    color={SEC.textMuted}
-                  />
-                </TouchableOpacity>
+            <View style={styles.dutyGridAccordionLeft}>
+              <Ionicons name="grid-outline" size={18} color={HK.teal} />
+              <View>
+                <Text style={styles.dutyGridAccordionTitle}>Today&apos;s duty board</Text>
+                <Text style={styles.dutyGridAccordionSub}>
+                  Swipe in & out · Shift {activeHkShift}
+                </Text>
               </View>
             </View>
-          </LinearGradient>
+            <Ionicons
+              name={hkDutyGridOpen ? 'chevron-up' : 'chevron-down'}
+              size={18}
+              color={SEC.textMuted}
+            />
+          </Pressable>
 
-          {showHkDateMenu ? (
-            <View style={styles.premiumDropdownMenu}>
-              {HK_DATE_PRESETS.map(({ key, label }) => {
-                const active = staffTimePreset === key;
-                return (
-                  <TouchableOpacity
-                    key={key}
-                    style={[styles.premiumDropdownOption, active && styles.premiumDropdownOptionActive]}
-                    onPress={() => {
-                      setStaffTimePreset(key);
-                      setShowHkDateMenu(false);
-                    }}
-                  >
-                    <Text style={[styles.premiumOptionText, active && styles.premiumOptionTextActive]}>
-                      {label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+          {hkDutyGridOpen ? (
+            <SecurityDutyDayGrid
+              sessions={hkGridSessions}
+              activeShift={activeHkShift}
+              onShiftChange={setActiveHkShift}
+              loading={hkDayLoading || onDutyHkLoading}
+              locationColumnLabel="Location"
+              theme="housekeeping"
+              emptyMessage="No check-ins for this shift today."
+            />
           ) : null}
 
-          <View style={styles.securityBody}>
-            {staffTimePreset === 'custom' ? (
-              <View style={styles.premiumCustomRangeRow}>
-                <TextInput
-                  style={styles.premiumRangeInput}
-                  placeholder="From (DD/MM/YYYY)"
-                  placeholderTextColor={SEC.textDim}
-                  value={staffDateRange.from}
-                  onChangeText={(t) => setStaffDateRange((p) => ({ ...p, from: t }))}
-                />
-                <TextInput
-                  style={styles.premiumRangeInput}
-                  placeholder="To (DD/MM/YYYY)"
-                  placeholderTextColor={SEC.textDim}
-                  value={staffDateRange.to}
-                  onChangeText={(t) => setStaffDateRange((p) => ({ ...p, to: t }))}
-                />
-              </View>
-            ) : null}
-
-            <View style={styles.securityStatsGrid}>
-              {isHkLoading ? (
-                <ActivityIndicator size="small" color={SEC.teal} style={styles.securityLoader} />
-              ) : (
-                <>
-                  <View style={styles.securityStatItem}>
-                    <View style={styles.securityStatValueRow}>
-                      <Text
-                        style={[
-                          styles.securityStatMainVal,
-                          headcountOk ? styles.securityValPositive : styles.securityValNegative,
-                        ]}
-                      >
-                        {dailyTotal}/{dailyExpected}
-                      </Text>
-                      <View
-                        style={[
-                          styles.miniBadge,
-                          headcountOk ? styles.miniBadgeSuccess : styles.miniBadgeError,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.miniBadgeText,
-                            headcountOk ? styles.miniBadgeTextSuccess : styles.miniBadgeTextError,
-                          ]}
-                        >
-                          {headcountOk ? 'OK' : dailyExpected > 0 ? `-${dailyShortage}` : '—'}
-                        </Text>
-                      </View>
-                    </View>
-                    {hkPeriodLabel ? (
-                      <Text style={styles.securityBillFootnote} numberOfLines={2}>
-                        {hkPeriodLabel}
-                      </Text>
-                    ) : null}
-                  </View>
-                  <View style={styles.securityStatDivider} />
-                  <View style={styles.securityStatItem}>
-                    <View style={styles.securityStatValueRow}>
-                      <Text style={[styles.securityStatMainVal, styles.securityValBill]}>
-                        {hkBillHeadline}
-                      </Text>
-                    </View>
-                    <Text style={styles.securityBillFootnote}>Shift-based estimate</Text>
-                  </View>
-                </>
-              )}
-            </View>
-            {hkFetchError && !isHkLoading ? (
-              <Text style={styles.securityEmptyRoles}>{hkFetchError}</Text>
-            ) : null}
-
-            <View style={styles.hubActionRow}>
-              <TouchableOpacity
-                style={[styles.hubBtn, styles.hubBtnDuty]}
-                onPress={() => openHkDutyModal('check-in')}
-              >
-                <Ionicons name="log-in-outline" size={16} color="#93C5FD" />
-                <Text style={styles.hubBtnTextDuty}>Check in</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.hubBtn, styles.hubBtnDutyOut]}
-                onPress={() => openHkDutyModal('check-out')}
-              >
-                <Ionicons name="log-out-outline" size={16} color="#FCA5A5" />
-                <Text style={styles.hubBtnTextDutyOut}>Check out</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.dutyAttendanceSection}>
-              <Text style={styles.dutyAttendanceHeading}>Hours on site (check-in → check-out)</Text>
-              {hkDutySessionsLoading ? (
-                <ActivityIndicator size="small" color={SEC.teal} style={styles.securityLoader} />
-              ) : hkDutySessions.length === 0 ? (
-                <Text style={styles.dutyAttendanceEmpty}>
-                  No check-in records for {hkDutyDateParams.label || 'this period'}.
+          <Pressable
+            style={styles.dutyGridAccordion}
+            onPress={() => {
+              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+              setHkDeploymentOpen((o) => !o);
+            }}
+          >
+            <View style={styles.dutyGridAccordionLeft}>
+              <Ionicons name="stats-chart-outline" size={18} color={HK.gold} />
+              <View>
+                <Text style={styles.dutyGridAccordionTitle}>Deployment & billing</Text>
+                <Text style={styles.dutyGridAccordionSub}>
+                  Headcount · estimate · S1/S2 by role
                 </Text>
-              ) : (
-                <>
-                  {hkDutyHoursByStaff.length > 0 ? (
-                    <View style={styles.dutyTotalsRow}>
-                      {hkDutyHoursByStaff.map((row) => (
-                        <View key={row.staffName} style={styles.dutyTotalChip}>
-                          <Text style={styles.dutyTotalName} numberOfLines={1}>
-                            {row.staffName}
-                          </Text>
-                          <Text style={styles.dutyTotalHours}>{row.label}</Text>
-                        </View>
-                      ))}
-                    </View>
-                  ) : null}
-                  {hkDutySessions.map((session) => (
-                    <View
-                      key={session.id}
-                      style={[
-                        styles.dutySessionRow,
-                        session.status === 'open' && styles.dutySessionRowOpen,
-                      ]}
-                    >
-                      <View style={styles.dutySessionMain}>
-                        <Text style={styles.dutySessionName} numberOfLines={1}>
-                          {session.staffName}
-                        </Text>
-                        <Text style={styles.dutySessionLoc} numberOfLines={1}>
-                          {session.locationName}
-                          {session.entryShiftDisplay ? ` · ${session.entryShiftDisplay}` : ''}
-                        </Text>
-                        <Text style={styles.dutySessionTimes} numberOfLines={2}>
-                          In {formatDutyTime(session.entryAt)}
-                          {session.exitAt
-                            ? ` · Out ${formatDutyTime(session.exitAt)}`
-                            : ' · Still on duty'}
-                        </Text>
-                      </View>
-                      <View style={styles.dutySessionHoursWrap}>
-                        <Text
-                          style={[
-                            styles.dutySessionHours,
-                            session.status === 'open' && styles.dutySessionHoursOpen,
-                          ]}
-                        >
-                          {displayHkDutyDuration(session)}
-                        </Text>
-                        {session.durationHours != null && session.status !== 'open' ? (
-                          <Text style={styles.dutySessionHoursSub}>
-                            {session.durationHours}h total
-                          </Text>
-                        ) : null}
-                      </View>
-                    </View>
-                  ))}
-                </>
-              )}
+              </View>
             </View>
+            <Ionicons
+              name={hkDeploymentOpen ? 'chevron-up' : 'chevron-down'}
+              size={18}
+              color={SEC.textMuted}
+            />
+          </Pressable>
 
-            <View style={styles.premiumRolesList}>
-              {fmHkStaff.length === 0 ? (
-                <Text style={styles.securityEmptyRoles}>No housekeeping contract roles configured.</Text>
-              ) : null}
-              {fmHkStaff.map((item) => {
-                const s1Short = item.actualS1 < item.expected;
-                const s2Short = item.actualS2 < item.expected;
-                const roleOk = !s1Short && !s2Short;
-                const queuedForRole = hkOverlay.filter(
-                  (e) => normalizeRoleKey(e.designation) === normalizeRoleKey(item.role),
-                ).length;
-                return (
-                  <View
-                    key={item.id}
-                    style={[styles.premiumRoleRow, queuedForRole > 0 && styles.premiumRoleRowQueued]}
-                  >
-                    <Text style={styles.roleNameCompact} numberOfLines={1}>
-                      {item.role}
-                      {queuedForRole > 0 ? (
-                        <Text style={styles.roleQueuedBadge}> +{queuedForRole}</Text>
-                      ) : null}
-                    </Text>
-                    <View style={styles.roleCountGroup}>
-                      <View style={[styles.shiftPill, s1Short && styles.shiftPillWarn]}>
-                        <Text style={styles.shiftPillLabel}>S1</Text>
-                        <Text style={[styles.shiftPillVal, s1Short && styles.shiftValError]}>
-                          {item.actualS1}/{item.expected}
-                        </Text>
-                      </View>
-                      <View style={[styles.shiftPill, s2Short && styles.shiftPillWarn]}>
-                        <Text style={styles.shiftPillLabel}>S2</Text>
-                        <Text style={[styles.shiftPillVal, s2Short && styles.shiftValError]}>
-                          {item.actualS2}/{item.expected}
-                        </Text>
-                      </View>
-                      <View
-                        style={[
-                          styles.roleStatusDot,
-                          roleOk ? styles.roleStatusOk : styles.roleStatusWarn,
-                        ]}
-                      />
-                    </View>
-                  </View>
-                );
-              })}
-            </View>
-          </View>
+          {hkDeploymentOpen ? (
+            <HousekeepingDeploymentBillingPanel
+              dashboard={hkDashboard}
+              roles={hkRoleDisplayRows}
+              isLoading={isHkLoading}
+              error={hkFetchError}
+              periodLabel={hkPeriodLabel}
+              datePreset={hkDeployDatePreset}
+              customRange={hkDeployCustomRange}
+              onOpenDatePicker={() => setHkDeployDateMenuOpen(true)}
+              onCustomRangeChange={setHkDeployCustomRange}
+              onRefresh={refreshHkData}
+            />
+          ) : null}
         </View>
       </View>
+    </View>
+  );
+
+  const renderSecurityCollapsedSummary = () =>
+    renderCollapsedDutyActions(
+      () => openSecurityDutyModal('check-in'),
+      () => openSecurityDutyModal('check-out'),
     );
-  };
 
-  const renderSecurityDetails = () => {
-    const securityStaff = securityRoleDisplayRows;
+  const renderSecurityDetails = () => (
+    <View style={styles.securityExpandedShell}>
+      <View style={styles.premiumSecurityCard}>
+        <View style={styles.securityBody}>
+          {isStaffLoading ? (
+            <ActivityIndicator size="small" color={SEC.teal} style={styles.securityLoader} />
+          ) : (
+            <SecurityShiftShortageBar metrics={securityShiftShortage} />
+          )}
 
-    const dailyTotal =
-      securityDashboard?.totalDeployed ??
-      securityStaff.reduce((s, c) => s + c.actualS1 + c.actualS2, 0);
-    const dailyExpected =
-      securityDashboard?.totalRequired ??
-      securityStaff.reduce((s, c) => s + c.expected * 2, 0);
-    const dailyShortage =
-      securityDashboard?.totalShortage ?? Math.max(0, dailyExpected - dailyTotal);
-
-    const shiftBillEst = estimateSecurityBillFromShifts(
-      securityStaff,
-      securityRoleRates,
-      sanctionedStrength,
-    );
-    const contractBillBroken = Boolean(
-      securityBilling?.message &&
-        (String(securityBilling.message).includes('42703') ||
-          String(securityBilling.message).includes('Could not load vendor contract'))
-    );
-    const apiGrand = Number(securityBilling?.grandTotal ?? securityBilling?.GrandTotal);
-    const periodWages = Number(securityDashboard?.estimatedWages ?? 0);
-    const useOfficialBill =
-      securityDateRange === 'Last 1 Month' &&
-      !contractBillBroken &&
-      securityBilling != null &&
-      !Number.isNaN(apiGrand) &&
-      apiGrand > 0;
-    const displayBillAmount = useOfficialBill
-      ? apiGrand
-      : periodWages > 0
-        ? periodWages
-        : shiftBillEst.total;
-    const billHeadline = displayBillAmount > 0 ? formatINR(displayBillAmount) : '---';
-    const billFootnoteHint =
-      !useOfficialBill &&
-      displayBillAmount <= 0 &&
-      securityBilling?.message &&
-      !contractBillBroken
-        ? String(securityBilling.message).slice(0, 80)
-        : null;
-
-    const headcountOk = dailyShortage === 0 && dailyExpected > 0;
-
-    return (
-      <View style={styles.securityExpandedShell}>
-        <View style={styles.premiumSecurityCard}>
-          <LinearGradient
-            colors={SEC.headerGradient}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.securityPremiumHeader}
+          <Pressable
+            style={styles.dutyGridAccordion}
+            onPress={() => {
+              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+              setSecurityDutyGridOpen((o) => !o);
+            }}
           >
-            <View style={styles.securityHeaderContent}>
-              <View style={styles.securityHeaderLeft}>
-                <Text style={styles.securityPremiumTitle}>Deployment</Text>
-              </View>
-              <View style={styles.securityHeaderRight}>
-                <TouchableOpacity
-                  style={[
-                    styles.securityPremiumDropdown,
-                    showSecurityDateMenu && styles.securityPremiumDropdownActive,
-                  ]}
-                  onPress={() => setShowSecurityDateMenu(!showSecurityDateMenu)}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name="calendar-outline" size={15} color={SEC.gold} />
-                  <Text style={styles.securityPremiumDateText}>{securityDateRange}</Text>
-                  <Ionicons
-                    name={showSecurityDateMenu ? 'chevron-up' : 'chevron-down'}
-                    size={14}
-                    color={SEC.textMuted}
-                  />
-                </TouchableOpacity>
+            <View style={styles.dutyGridAccordionLeft}>
+              <Ionicons name="grid-outline" size={18} color={SEC.teal} />
+              <View>
+                <Text style={styles.dutyGridAccordionTitle}>Today&apos;s duty board</Text>
+                <Text style={styles.dutyGridAccordionSub}>
+                  Swipe in & out · Shift {activeShift}
+                </Text>
               </View>
             </View>
-          </LinearGradient>
+            <Ionicons
+              name={securityDutyGridOpen ? 'chevron-up' : 'chevron-down'}
+              size={18}
+              color={SEC.textMuted}
+            />
+          </Pressable>
 
-          {showSecurityDateMenu ? (
-            <View style={styles.premiumDropdownMenu}>
-              {['Today', 'Last 1 Week', 'Last 1 Month', 'Custom Range'].map((opt) => {
-                const active = securityDateRange === opt;
-                return (
-                  <TouchableOpacity
-                    key={opt}
-                    style={[styles.premiumDropdownOption, active && styles.premiumDropdownOptionActive]}
-                    onPress={() => {
-                      setSecurityDateRange(opt);
-                      setShowSecurityDateMenu(false);
-                    }}
-                  >
-                    <Text style={[styles.premiumOptionText, active && styles.premiumOptionTextActive]}>
-                      {opt}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+          {securityDutyGridOpen ? (
+            <SecurityDutyDayGrid
+              sessions={securityGridSessions}
+              activeShift={activeShift}
+              onShiftChange={setActiveShift}
+              loading={securityDayLoading || onDutyLoading}
+              emptyMessage="No check-ins for this shift today."
+            />
           ) : null}
 
-          <View style={styles.securityBody}>
-            {securityDateRange === 'Custom Range' ? (
-              <View style={styles.premiumCustomRangeRow}>
-                <TextInput
-                  style={styles.premiumRangeInput}
-                  placeholder="From (DD/MM/YYYY)"
-                  placeholderTextColor={SEC.textDim}
-                  value={customRange.from}
-                  onChangeText={(v) => setCustomRange((p) => ({ ...p, from: v }))}
-                />
-                <TextInput
-                  style={styles.premiumRangeInput}
-                  placeholder="To (DD/MM/YYYY)"
-                  placeholderTextColor={SEC.textDim}
-                  value={customRange.to}
-                  onChangeText={(v) => setCustomRange((p) => ({ ...p, to: v }))}
-                />
-              </View>
-            ) : null}
-
-            <View style={styles.securityStatsGrid}>
-              {isStaffLoading ? (
-                <ActivityIndicator size="small" color={SEC.teal} style={styles.securityLoader} />
-              ) : (
-                <>
-                  <View style={styles.securityStatItem}>
-                    <View style={styles.securityStatValueRow}>
-                      <Text
-                        style={[
-                          styles.securityStatMainVal,
-                          headcountOk ? styles.securityValPositive : styles.securityValNegative,
-                        ]}
-                      >
-                        {dailyTotal}/{dailyExpected}
-                      </Text>
-                      <View
-                        style={[
-                          styles.miniBadge,
-                          headcountOk ? styles.miniBadgeSuccess : styles.miniBadgeError,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.miniBadgeText,
-                            headcountOk ? styles.miniBadgeTextSuccess : styles.miniBadgeTextError,
-                          ]}
-                        >
-                          {headcountOk ? 'OK' : `-${dailyShortage}`}
-                        </Text>
-                      </View>
-                    </View>
-                    {securityPeriodLabel ? (
-                      <Text style={styles.securityBillFootnote} numberOfLines={2}>
-                        {securityPeriodLabel}
-                      </Text>
-                    ) : null}
-                  </View>
-                  <View style={styles.securityStatDivider} />
-                  <View style={styles.securityStatItem}>
-                    <View style={styles.securityStatValueRow}>
-                      <Text style={[styles.securityStatMainVal, styles.securityValBill]}>
-                        {billHeadline}
-                      </Text>
-                    </View>
-                    {useOfficialBill ? (
-                      <Text style={styles.securityBillFootnote}>Vendor contract rate</Text>
-                    ) : (
-                      <Text style={styles.securityBillFootnote} numberOfLines={2}>
-                        {billFootnoteHint || 'Shift-based estimate'}
-                      </Text>
-                    )}
-                  </View>
-                </>
-              )}
-            </View>
-            {fetchErrors?.opsDashboard && !isStaffLoading ? (
-              <Text style={styles.securityEmptyRoles}>{fetchErrors.opsDashboard}</Text>
-            ) : null}
-
-            <View style={styles.hubActionRow}>
-              <TouchableOpacity
-                style={[styles.hubBtn, styles.hubBtnDuty]}
-                onPress={() => openSecurityDutyModal('check-in')}
-              >
-                <Ionicons name="log-in-outline" size={16} color="#93C5FD" />
-                <Text style={styles.hubBtnTextDuty}>Check in</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.hubBtn, styles.hubBtnDutyOut]}
-                onPress={() => openSecurityDutyModal('check-out')}
-              >
-                <Ionicons name="log-out-outline" size={16} color="#FCA5A5" />
-                <Text style={styles.hubBtnTextDutyOut}>Check out</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.dutyAttendanceSection}>
-              <Text style={styles.dutyAttendanceHeading}>Hours on site (check-in → check-out)</Text>
-              {dutySessionsLoading ? (
-                <ActivityIndicator size="small" color={SEC.teal} style={styles.securityLoader} />
-              ) : dutySessions.length === 0 ? (
-                <Text style={styles.dutyAttendanceEmpty}>
-                  No check-in records for {dutyDateParams.label || 'this period'}.
+          <Pressable
+            style={styles.dutyGridAccordion}
+            onPress={() => {
+              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+              setSecurityDeploymentOpen((o) => !o);
+            }}
+          >
+            <View style={styles.dutyGridAccordionLeft}>
+              <Ionicons name="stats-chart-outline" size={18} color={SEC.gold} />
+              <View>
+                <Text style={styles.dutyGridAccordionTitle}>Deployment & billing</Text>
+                <Text style={styles.dutyGridAccordionSub}>
+                  Headcount · estimate · S1/S2 by role
                 </Text>
-              ) : (
-                <>
-                  {dutyHoursByStaff.length > 0 ? (
-                    <View style={styles.dutyTotalsRow}>
-                      {dutyHoursByStaff.map((row) => (
-                        <View key={row.staffName} style={styles.dutyTotalChip}>
-                          <Text style={styles.dutyTotalName} numberOfLines={1}>
-                            {row.staffName}
-                          </Text>
-                          <Text style={styles.dutyTotalHours}>{row.label}</Text>
-                        </View>
-                      ))}
-                    </View>
-                  ) : null}
-                  {dutySessions.map((session) => (
-                    <View
-                      key={session.id}
-                      style={[
-                        styles.dutySessionRow,
-                        session.status === 'open' && styles.dutySessionRowOpen,
-                      ]}
-                    >
-                      <View style={styles.dutySessionMain}>
-                        <Text style={styles.dutySessionName} numberOfLines={1}>
-                          {session.staffName}
-                        </Text>
-                        <Text style={styles.dutySessionLoc} numberOfLines={1}>
-                          {session.locationName}
-                          {session.entryShiftDisplay ? ` · ${session.entryShiftDisplay}` : ''}
-                        </Text>
-                        <Text style={styles.dutySessionTimes} numberOfLines={2}>
-                          In {formatDutyTime(session.entryAt)}
-                          {session.exitAt
-                            ? ` · Out ${formatDutyTime(session.exitAt)}`
-                            : ' · Still on duty'}
-                        </Text>
-                      </View>
-                      <View style={styles.dutySessionHoursWrap}>
-                        <Text
-                          style={[
-                            styles.dutySessionHours,
-                            session.status === 'open' && styles.dutySessionHoursOpen,
-                          ]}
-                        >
-                          {displayDutyDuration(session)}
-                        </Text>
-                        {session.durationHours != null && session.status !== 'open' ? (
-                          <Text style={styles.dutySessionHoursSub}>
-                            {session.durationHours}h total
-                          </Text>
-                        ) : null}
-                      </View>
-                    </View>
-                  ))}
-                </>
-              )}
+              </View>
             </View>
+            <Ionicons
+              name={securityDeploymentOpen ? 'chevron-up' : 'chevron-down'}
+              size={18}
+              color={SEC.textMuted}
+            />
+          </Pressable>
 
-            <View style={styles.premiumRolesList}>
-              {securityStaff.length === 0 && !isStaffLoading ? (
-                <Text style={styles.securityEmptyRoles}>No deployment roles for this period.</Text>
-              ) : null}
-              {securityStaff.map((item) => {
-                const s1Short = item.actualS1 < item.expected;
-                const s2Short = item.actualS2 < item.expected;
-                const roleOk = !s1Short && !s2Short;
-                const queuedForRole = committedSecurityEntries.filter(
-                  (e) => normalizeRoleKey(e.designation) === normalizeRoleKey(item.role),
-                ).length;
-                return (
-                  <View
-                    key={item.id}
-                    style={[styles.premiumRoleRow, queuedForRole > 0 && styles.premiumRoleRowQueued]}
-                  >
-                    <Text style={styles.roleNameCompact} numberOfLines={1}>
-                      {item.role}
-                      {queuedForRole > 0 ? (
-                        <Text style={styles.roleQueuedBadge}> +{queuedForRole}</Text>
-                      ) : null}
-                    </Text>
-                    <View style={styles.roleCountGroup}>
-                      <View style={[styles.shiftPill, s1Short && styles.shiftPillWarn]}>
-                        <Text style={styles.shiftPillLabel}>S1</Text>
-                        <Text style={[styles.shiftPillVal, s1Short && styles.shiftValError]}>
-                          {item.actualS1}/{item.expected}
-                        </Text>
-                      </View>
-                      <View style={[styles.shiftPill, s2Short && styles.shiftPillWarn]}>
-                        <Text style={styles.shiftPillLabel}>S2</Text>
-                        <Text style={[styles.shiftPillVal, s2Short && styles.shiftValError]}>
-                          {item.actualS2}/{item.expected}
-                        </Text>
-                      </View>
-                      <View
-                        style={[
-                          styles.roleStatusDot,
-                          roleOk ? styles.roleStatusOk : styles.roleStatusWarn,
-                        ]}
-                      />
-                    </View>
-                  </View>
-                );
-              })}
-            </View>
-          </View>
+          {securityDeploymentOpen ? (
+            <SecurityDeploymentBillingPanel
+              staffCounts={securityStaffCounts}
+              securityRoleRates={securityRoleRates}
+              sanctionedStrength={sanctionedStrength}
+              securityBilling={securityBilling}
+              securityDashboard={securityDashboard}
+              roles={securityRoleDisplayRows}
+              isLoading={isStaffLoading}
+              fetchErrors={fetchErrors}
+              periodLabel={securityPeriodLabel}
+              dateRange={SECURITY_DEPLOY_RANGE_MAP[securityDeployDatePreset] ?? 'Today'}
+              datePreset={securityDeployDatePreset}
+              customRange={securityDeployCustomRange}
+              onOpenDatePicker={() => setSecurityDeployDateMenuOpen(true)}
+              onCustomRangeChange={setSecurityDeployCustomRange}
+              onRefresh={refreshSecurityData}
+            />
+          ) : null}
         </View>
       </View>
-    );
-  };
+    </View>
+  );
 
   const closeSecurityDutyModal = useCallback(() => {
     setDeploymentPickerOpen(null);
@@ -2401,13 +1973,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
         if (!accessToken || cancelled) return;
         const onDuty = await fetchOnDutyHkSessions(accessToken);
         if (cancelled || !onDuty?.length) return;
-        setHkDutySessions((prev) => {
-          const byId = new Map(prev.map((s) => [s.id, s]));
-          for (const s of onDuty) {
-            if (s?.id) byId.set(s.id, s);
-          }
-          return [...byId.values()];
-        });
+        setOnDutyHkSessions(Array.isArray(onDuty) ? onDuty : []);
       } catch (err) {
         if (!cancelled) console.warn('HK on-duty list load:', err?.message);
       }
@@ -2426,13 +1992,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
         if (!accessToken || cancelled) return;
         const onDuty = await fetchOnDutySessions(accessToken);
         if (cancelled || !onDuty?.length) return;
-        setDutySessions((prev) => {
-          const byId = new Map(prev.map((s) => [s.id, s]));
-          for (const s of onDuty) {
-            if (s?.id) byId.set(s.id, s);
-          }
-          return [...byId.values()];
-        });
+        setOnDutySessions(Array.isArray(onDuty) ? onDuty : []);
       } catch (err) {
         if (!cancelled) console.warn('On-duty list load:', err?.message);
       }
@@ -2453,6 +2013,19 @@ export default function AdminDashboardScreen({ navigation, route }) {
       designation,
       staffName: deployName,
       location: deployLocation,
+      photo: staffAttendancePhoto,
+    };
+  };
+
+  /** Housekeeping duty — designation + staff + photo (no location field). */
+  const buildDraftHkDutyEntry = () => {
+    const designation = deploymentForm.designation.trim();
+    const deployName = deploymentForm.name.trim();
+    if (!deployName || !staffAttendancePhoto?.uri) return null;
+    if (hkDutyModal === 'check-in' && !designation) return null;
+    return {
+      designation,
+      staffName: deployName,
       photo: staffAttendancePhoto,
     };
   };
@@ -2485,6 +2058,13 @@ export default function AdminDashboardScreen({ navigation, route }) {
       };
 
       if (securityDutyModal === 'check-in') {
+        if (isStaffOnDuty(draft.staffName, onDutySessions)) {
+          Alert.alert(
+            'Already on duty',
+            `${draft.staffName} is already checked in. Check them out before a new check-in.`,
+          );
+          return;
+        }
         const session = await postDutyCheckIn(accessToken, {
           staffName: draft.staffName,
           locationName: draft.location,
@@ -2508,7 +2088,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
           'Checked in',
           `${draft.staffName} at ${draft.location}.${shiftLine ? `\n${shiftLine}` : ''}${gpsLine}\nTimer started — hours show after check-out.`,
         );
-        setDutySessionsTick((t) => t + 1);
+        await loadOnDutyForSection('Security');
+        if (securityDutyGridOpen) await loadSecurityDayBoard();
       } else {
         let sessionId = checkoutDutySessionId;
         if (!sessionId) {
@@ -2536,7 +2117,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
             + (shiftLine ? `\n${shiftLine}` : '')
             + gpsLine,
         );
-        setDutySessionsTick((t) => t + 1);
+        await loadOnDutyForSection('Security');
+        if (securityDutyGridOpen) await loadSecurityDayBoard();
       }
 
       closeSecurityDutyModal();
@@ -2593,12 +2175,10 @@ export default function AdminDashboardScreen({ navigation, route }) {
       const needle = (staffName || '').trim().toLowerCase();
       if (!needle) return null;
       return (
-        dutySessions.find(
-          (s) => s.status === 'open' && s.staffName?.trim().toLowerCase() === needle,
-        ) ?? null
+        onDutySessions.find((s) => s.staffName?.trim().toLowerCase() === needle) ?? null
       );
     },
-    [dutySessions],
+    [onDutySessions],
   );
 
   const applyCheckoutStaffSelection = useCallback(
@@ -2638,19 +2218,20 @@ export default function AdminDashboardScreen({ navigation, route }) {
     setDeploymentForm({ designation: '', name: '', location: '' });
     setStaffAttendancePhoto(null);
     setDeploymentPickerOpen(null);
-  }, []);
+    if (mode === 'check-in') {
+      void loadOnDutyForSection('Security');
+    }
+  }, [loadOnDutyForSection]);
 
   const findOpenHkDutySessionLocal = useCallback(
     (staffName) => {
       const needle = (staffName || '').trim().toLowerCase();
       if (!needle) return null;
       return (
-        hkDutySessions.find(
-          (s) => s.status === 'open' && s.staffName?.trim().toLowerCase() === needle,
-        ) ?? null
+        onDutyHkSessions.find((s) => s.staffName?.trim().toLowerCase() === needle) ?? null
       );
     },
-    [hkDutySessions],
+    [onDutyHkSessions],
   );
 
   const applyHkCheckoutStaffSelection = useCallback(
@@ -2675,7 +2256,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
       setDeploymentForm({
         name: open.staffName,
         designation: open.designation || '',
-        location: open.locationName || '',
+        location: '',
       });
     },
     [findOpenHkDutySessionLocal, token],
@@ -2700,13 +2281,24 @@ export default function AdminDashboardScreen({ navigation, route }) {
     setDeploymentForm({ designation: '', name: '', location: '' });
     setStaffAttendancePhoto(null);
     setDeploymentPickerOpen(null);
-  }, []);
+    if (mode === 'check-in') {
+      void loadOnDutyForSection('Workforce');
+    }
+  }, [loadOnDutyForSection]);
 
   const saveHkDutyForm = async () => {
-    const draft = buildDraftSecurityEntry();
+    const draft = buildDraftHkDutyEntry();
     if (!draft) {
-      if (!deploymentForm.designation.trim() || !deploymentForm.name.trim() || !deploymentForm.location.trim()) {
-        Alert.alert('Missing details', 'Please select designation, staff name, and location.');
+      if (
+        !deploymentForm.name.trim()
+        || (hkDutyModal === 'check-in' && !deploymentForm.designation.trim())
+      ) {
+        Alert.alert(
+          'Missing details',
+          hkDutyModal === 'check-out'
+            ? 'Please select staff on duty.'
+            : 'Please select designation and staff name.',
+        );
       } else {
         Alert.alert('Photo required', 'Take a verification photo with the camera.');
       }
@@ -2730,9 +2322,16 @@ export default function AdminDashboardScreen({ navigation, route }) {
       };
 
       if (hkDutyModal === 'check-in') {
+        if (isStaffOnDuty(draft.staffName, onDutyHkSessions)) {
+          Alert.alert(
+            'Already on duty',
+            `${draft.staffName} is already checked in. Check them out before a new check-in.`,
+          );
+          return;
+        }
         const session = await postHkDutyCheckIn(accessToken, {
           staffName: draft.staffName,
-          locationName: draft.location,
+          locationName: 'On site',
           designation: draft.designation,
           ...photoPayload,
         });
@@ -2743,9 +2342,10 @@ export default function AdminDashboardScreen({ navigation, route }) {
         const shiftLine = session.entryShiftDisplay || '';
         Alert.alert(
           'Checked in',
-          `${draft.staffName} at ${draft.location}.${shiftLine ? `\n${shiftLine}` : ''}\nTimer started — hours show after check-out.`,
+          `${draft.staffName} is on duty.${shiftLine ? `\n${shiftLine}` : ''}\nTimer started — hours show after check-out.`,
         );
-        setHkDutySessionsTick((t) => t + 1);
+        await loadOnDutyForSection('Workforce');
+        if (hkDutyGridOpen) await loadHkDayBoard();
       } else {
         let sessionId = hkCheckoutSessionId;
         if (!sessionId) {
@@ -2763,7 +2363,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
         const present = session.durationLabel
           || formatDutyDurationMinutes(session.durationMinutes);
         Alert.alert('Checked out', `${draft.staffName} was on site for ${present}.`);
-        setHkDutySessionsTick((t) => t + 1);
+        await loadOnDutyForSection('Workforce');
+        if (hkDutyGridOpen) await loadHkDayBoard();
       }
 
       closeHkDutyModal();
@@ -2799,7 +2400,6 @@ export default function AdminDashboardScreen({ navigation, route }) {
   };
 
   const renderExpandedBody = (section) => {
-    if (section.id === 'Workforce') return renderWorkforceDetails();
     if (section.id === 'promotions') return renderPromotionsDetails();
     if (section.id === 'mygate') return renderMyGateDetails();
     return renderModulePreview(section);
@@ -2840,33 +2440,11 @@ export default function AdminDashboardScreen({ navigation, route }) {
         contentContainerStyle={[
           styles.scrollContent,
           {
-            paddingBottom: tabBarHeight + insets.bottom + 12,
+            paddingBottom: tabBarHeight + 12,
             width: screenWidth,
           },
         ]}
       >
-        {permissions?.canSeeModule('Workforce') && !permissions?.canSeeModule('Security') ? (
-          <View style={[styles.fmDutyBanner, { width: screenWidth - CONTENT_PAD * 2 }]}>
-            <Text style={styles.fmDutyBannerTitle}>Housekeeping check-in</Text>
-            <View style={styles.hubActionRow}>
-              <TouchableOpacity
-                style={[styles.hubBtn, styles.hubBtnDuty]}
-                onPress={() => navigation.navigate('HkDuty', { mode: 'check-in' })}
-              >
-                <Ionicons name="log-in-outline" size={16} color="#93C5FD" />
-                <Text style={styles.hubBtnTextDuty}>Check in</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.hubBtn, styles.hubBtnDutyOut]}
-                onPress={() => navigation.navigate('HkDuty', { mode: 'check-out' })}
-              >
-                <Ionicons name="log-out-outline" size={16} color="#FCA5A5" />
-                <Text style={styles.hubBtnTextDutyOut}>Check out</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        ) : null}
-
         <View style={[styles.cardsStack, { width: screenWidth - CONTENT_PAD * 2 }]}>
           {visibleDashboardSections.map((section, index) => {
             const expanded = expandedId === section.id;
@@ -2883,7 +2461,9 @@ export default function AdminDashboardScreen({ navigation, route }) {
                 {expanded
                   ? section.id === 'Security'
                     ? renderSecurityDetails()
-                    : section.id === 'rentals'
+                    : section.id === 'Workforce'
+                      ? renderHousekeepingDetails()
+                      : section.id === 'rentals'
                       ? renderRentalsDetails()
                       : section.id === 'amc'
                         ? renderAmcDetails()
@@ -2892,16 +2472,10 @@ export default function AdminDashboardScreen({ navigation, route }) {
                           : section.id === 'Expenses'
                             ? renderExpensesDetails()
                             : renderExpandedBody(section)
-                  : section.id === 'Workforce'
-                    ? renderCollapsedDutyQuickActions(
-                        () => openHkDutyModal('check-in'),
-                        () => openHkDutyModal('check-out'),
-                      )
-                    : section.id === 'Security'
-                      ? renderCollapsedDutyQuickActions(
-                          () => openSecurityDutyModal('check-in'),
-                          () => openSecurityDutyModal('check-out'),
-                        )
+                  : section.id === 'Security'
+                    ? renderSecurityCollapsedSummary()
+                    : section.id === 'Workforce'
+                      ? renderHkCollapsedSummary()
                       : null}
               </FloatingModuleCard>
             );
@@ -3151,7 +2725,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
         visible={securityDutyModal != null}
         onClose={closeSecurityDutyModal}
         title={securityDutyModal === 'check-out' ? 'Check out' : 'Check in'}
-        maxHeight="88%"
+        maxHeight="96%"
+        scrollable={false}
         footer={
           <SecSaveButton
             label={securityDutyModal === 'check-out' ? 'Save check out' : 'Save check in'}
@@ -3167,15 +2742,15 @@ export default function AdminDashboardScreen({ navigation, route }) {
           />
         }
       >
-              <Text style={styles.secModalHint}>
+              <Text style={[styles.secModalHint, styles.dutyModalHint]}>
                 {securityDutyModal === 'check-out'
-                  ? 'Select the guard who is on duty. Designation and post are taken from their check-in and cannot be changed.'
-                  : 'Select designation, staff, and post — then capture a verification photo with the camera.'}
+                  ? 'Select on-duty guard. Designation and post are locked from check-in.'
+                  : 'Designation, staff, post, then camera photo.'}
               </Text>
               {securityDutyModal === 'check-out' ? (
                 <>
                   <TouchableOpacity
-                    style={styles.secSelect}
+                    style={[styles.secSelect, styles.dutyFormSelect]}
                     activeOpacity={0.85}
                     onPress={() => {
                       if (checkoutNameOptions.length === 0) {
@@ -3199,7 +2774,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
                     </Text>
                     <Ionicons name="chevron-down" size={18} color={SEC.textMuted} />
                   </TouchableOpacity>
-                  <View style={[styles.secSelect, styles.secSelectDisabled]}>
+                  <View style={[styles.secSelect, styles.dutyFormSelect, styles.secSelectDisabled]}>
                     <Text
                       style={[
                         styles.secSelectText,
@@ -3211,7 +2786,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
                     </Text>
                     <Ionicons name="lock-closed-outline" size={16} color={SEC.textDim} />
                   </View>
-                  <View style={[styles.secSelect, styles.secSelectDisabled]}>
+                  <View style={[styles.secSelect, styles.dutyFormSelect, styles.secSelectDisabled]}>
                     <Text
                       style={[
                         styles.secSelectText,
@@ -3227,7 +2802,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
               ) : (
                 <>
                   <TouchableOpacity
-                    style={styles.secSelect}
+                    style={[styles.secSelect, styles.dutyFormSelect]}
                     activeOpacity={0.85}
                     onPress={() => setDeploymentPickerOpen('designation')}
                   >
@@ -3244,9 +2819,18 @@ export default function AdminDashboardScreen({ navigation, route }) {
                   </TouchableOpacity>
 
                   <TouchableOpacity
-                    style={styles.secSelect}
+                    style={[styles.secSelect, styles.dutyFormSelect]}
                     activeOpacity={0.85}
-                    onPress={() => setDeploymentPickerOpen('name')}
+                    onPress={() => {
+                      if (securityCheckInNameOptions.length === 0) {
+                        Alert.alert(
+                          'Everyone on duty',
+                          'All listed staff are already checked in. Check someone out first.',
+                        );
+                        return;
+                      }
+                      setDeploymentPickerOpen('name');
+                    }}
                   >
                     <Text
                       style={[
@@ -3261,7 +2845,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
                   </TouchableOpacity>
 
                   <TouchableOpacity
-                    style={styles.secSelect}
+                    style={[styles.secSelect, styles.dutyFormSelect]}
                     activeOpacity={0.85}
                     onPress={() => setDeploymentPickerOpen('location')}
                   >
@@ -3280,7 +2864,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
               )}
 
               <TouchableOpacity
-                style={styles.secUploadBtn}
+                style={[styles.secUploadBtn, styles.dutyUploadBtn]}
                 activeOpacity={0.85}
                 onPress={pickStaffPhotoFromCamera}
               >
@@ -3288,8 +2872,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
                 <Text style={styles.secUploadBtnText}>Camera</Text>
               </TouchableOpacity>
               {staffAttendancePhoto?.uri ? (
-                <View style={styles.secPhotoPreviewWrap}>
-                  <Image source={{ uri: staffAttendancePhoto.uri }} style={styles.attendancePhotoPreview} />
+                <View style={[styles.secPhotoPreviewWrap, styles.dutyPhotoPreviewWrap]}>
+                  <Image source={{ uri: staffAttendancePhoto.uri }} style={styles.dutyPhotoPreview} />
                   <Text style={styles.secPhotoCaption} numberOfLines={2}>
                     {formatGeoCaption(staffAttendancePhoto)}
                   </Text>
@@ -3308,7 +2892,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
         visible={hkDutyModal != null}
         onClose={closeHkDutyModal}
         title={hkDutyModal === 'check-out' ? 'Check out' : 'Check in'}
-        maxHeight="88%"
+        maxHeight="96%"
+        scrollable={false}
         footer={
           <SecSaveButton
             label={hkDutyModal === 'check-out' ? 'Save check out' : 'Save check in'}
@@ -3318,73 +2903,47 @@ export default function AdminDashboardScreen({ navigation, route }) {
             loading={isSavingHkDuty}
             disabled={
               isSavingHkDuty
-              || !buildDraftSecurityEntry()
+              || !buildDraftHkDutyEntry()
               || (hkDutyModal === 'check-out' && !hkCheckoutSessionId)
             }
           />
         }
       >
-              <Text style={styles.secModalHint}>
+              <Text style={[styles.secModalHint, styles.dutyModalHint]}>
                 {hkDutyModal === 'check-out'
-                  ? 'Select staff who is on duty. Designation and location are taken from check-in and cannot be changed.'
-                  : 'Select designation, staff, and location — then capture a verification photo with the camera.'}
+                  ? 'Select on-duty staff, then camera photo.'
+                  : 'Designation, staff, then camera photo.'}
               </Text>
               {hkDutyModal === 'check-out' ? (
-                <>
-                  <TouchableOpacity
-                    style={styles.secSelect}
-                    activeOpacity={0.85}
-                    onPress={() => {
-                      if (hkCheckoutNameOptions.length === 0) {
-                        Alert.alert(
-                          'No one on duty',
-                          'No active check-ins. Use Check in first.',
-                        );
-                        return;
-                      }
-                      setDeploymentPickerOpen('name');
-                    }}
+                <TouchableOpacity
+                  style={[styles.secSelect, styles.dutyFormSelect]}
+                  activeOpacity={0.85}
+                  onPress={() => {
+                    if (hkCheckoutNameOptions.length === 0) {
+                      Alert.alert(
+                        'No one on duty',
+                        'No active check-ins. Use Check in first.',
+                      );
+                      return;
+                    }
+                    setDeploymentPickerOpen('name');
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.secSelectText,
+                      !deploymentForm.name && styles.secSelectPlaceholder,
+                    ]}
+                    numberOfLines={1}
                   >
-                    <Text
-                      style={[
-                        styles.secSelectText,
-                        !deploymentForm.name && styles.secSelectPlaceholder,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {deploymentForm.name || 'Select staff on duty'}
-                    </Text>
-                    <Ionicons name="chevron-down" size={18} color={SEC.textMuted} />
-                  </TouchableOpacity>
-                  <View style={[styles.secSelect, styles.secSelectDisabled]}>
-                    <Text
-                      style={[
-                        styles.secSelectText,
-                        !deploymentForm.designation && styles.secSelectPlaceholder,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {deploymentForm.designation || 'Designation (from check-in)'}
-                    </Text>
-                    <Ionicons name="lock-closed-outline" size={16} color={SEC.textDim} />
-                  </View>
-                  <View style={[styles.secSelect, styles.secSelectDisabled]}>
-                    <Text
-                      style={[
-                        styles.secSelectText,
-                        !deploymentForm.location && styles.secSelectPlaceholder,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {deploymentForm.location || 'Location (from check-in)'}
-                    </Text>
-                    <Ionicons name="lock-closed-outline" size={16} color={SEC.textDim} />
-                  </View>
-                </>
+                    {deploymentForm.name || 'Select staff on duty'}
+                  </Text>
+                  <Ionicons name="chevron-down" size={18} color={SEC.textMuted} />
+                </TouchableOpacity>
               ) : (
                 <>
                   <TouchableOpacity
-                    style={styles.secSelect}
+                    style={[styles.secSelect, styles.dutyFormSelect]}
                     activeOpacity={0.85}
                     onPress={() => setDeploymentPickerOpen('designation')}
                   >
@@ -3401,9 +2960,18 @@ export default function AdminDashboardScreen({ navigation, route }) {
                   </TouchableOpacity>
 
                   <TouchableOpacity
-                    style={styles.secSelect}
+                    style={[styles.secSelect, styles.dutyFormSelect]}
                     activeOpacity={0.85}
-                    onPress={() => setDeploymentPickerOpen('name')}
+                    onPress={() => {
+                      if (hkCheckInNameOptions.length === 0) {
+                        Alert.alert(
+                          'Everyone on duty',
+                          'All listed staff are already checked in. Check someone out first.',
+                        );
+                        return;
+                      }
+                      setDeploymentPickerOpen('name');
+                    }}
                   >
                     <Text
                       style={[
@@ -3416,28 +2984,11 @@ export default function AdminDashboardScreen({ navigation, route }) {
                     </Text>
                     <Ionicons name="chevron-down" size={18} color={SEC.textMuted} />
                   </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.secSelect}
-                    activeOpacity={0.85}
-                    onPress={() => setDeploymentPickerOpen('location')}
-                  >
-                    <Text
-                      style={[
-                        styles.secSelectText,
-                        !deploymentForm.location && styles.secSelectPlaceholder,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {deploymentForm.location || 'Select location'}
-                    </Text>
-                    <Ionicons name="chevron-down" size={18} color={SEC.textMuted} />
-                  </TouchableOpacity>
                 </>
               )}
 
               <TouchableOpacity
-                style={styles.secUploadBtn}
+                style={[styles.secUploadBtn, styles.dutyUploadBtn]}
                 activeOpacity={0.85}
                 onPress={pickStaffPhotoFromCamera}
               >
@@ -3445,8 +2996,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
                 <Text style={styles.secUploadBtnText}>Camera</Text>
               </TouchableOpacity>
               {staffAttendancePhoto?.uri ? (
-                <View style={styles.secPhotoPreviewWrap}>
-                  <Image source={{ uri: staffAttendancePhoto.uri }} style={styles.attendancePhotoPreview} />
+                <View style={[styles.secPhotoPreviewWrap, styles.dutyPhotoPreviewWrap]}>
+                  <Image source={{ uri: staffAttendancePhoto.uri }} style={styles.dutyPhotoPreview} />
                   <Text style={styles.secPhotoCaption} numberOfLines={2}>
                     {formatGeoCaption(staffAttendancePhoto)}
                   </Text>
@@ -3539,6 +3090,31 @@ export default function AdminDashboardScreen({ navigation, route }) {
           </View>
         </View>
       </Modal>
+
+      <BottomPickerSheet
+        visible={securityDeployDateMenuOpen}
+        title="Date range"
+        options={SECURITY_DEPLOY_DATE_PRESETS.map((p) => p.label)}
+        onSelect={(label) => {
+          const key =
+            SECURITY_DEPLOY_DATE_PRESETS.find((p) => p.label === label)?.key ?? 'today';
+          setSecurityDeployDatePreset(key);
+          setSecurityDeployDateMenuOpen(false);
+        }}
+        onClose={() => setSecurityDeployDateMenuOpen(false)}
+      />
+
+      <BottomPickerSheet
+        visible={hkDeployDateMenuOpen}
+        title="Date range"
+        options={HK_DEPLOY_DATE_PRESETS.map((p) => p.label)}
+        onSelect={(label) => {
+          const key = HK_DEPLOY_DATE_PRESETS.find((p) => p.label === label)?.key ?? 'today';
+          setHkDeployDatePreset(key);
+          setHkDeployDateMenuOpen(false);
+        }}
+        onClose={() => setHkDeployDateMenuOpen(false)}
+      />
     </View>
   );
 }
@@ -6310,6 +5886,29 @@ const styles = StyleSheet.create({
     ...SEC_FONTS.modalHint,
     marginBottom: 14,
   },
+  dutyModalHint: {
+    marginBottom: 8,
+    lineHeight: 16,
+  },
+  dutyFormSelect: {
+    paddingVertical: 9,
+    marginBottom: 8,
+  },
+  dutyUploadBtn: {
+    marginTop: 2,
+    marginBottom: 4,
+    paddingVertical: 9,
+  },
+  dutyPhotoPreviewWrap: {
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  dutyPhotoPreview: {
+    width: '100%',
+    height: 96,
+    borderRadius: 10,
+    backgroundColor: SEC.bg,
+  },
   secFieldLabel: {
     ...SEC_FONTS.label,
     color: SEC.textMuted,
@@ -6572,15 +6171,70 @@ const styles = StyleSheet.create({
     color: SEC.textDim,
     marginBottom: 4,
   },
+  securityPremiumSub: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.55)',
+    marginTop: 4,
+  },
+  securitySettingsLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: SEC.border,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+  },
+  securitySettingsLinkText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+    color: SEC.textMuted,
+  },
+  securityCollapsedSummary: {
+    borderTopWidth: 1,
+    borderTopColor: SEC.border,
+    backgroundColor: 'rgba(255,255,255,0.02)',
+  },
+  hubActionRowCollapsed: {
+    marginBottom: 0,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+  },
+  dutyGridAccordion: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: SEC.border,
+    backgroundColor: SEC.surfaceRaised,
+    marginBottom: 8,
+  },
+  dutyGridAccordionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  dutyGridAccordionTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: SEC.text,
+  },
+  dutyGridAccordionSub: {
+    fontSize: 11,
+    color: SEC.textMuted,
+    marginTop: 2,
+  },
   securityPremiumTitle: {
     ...SEC_FONTS.title,
     color: SEC.text,
-  },
-  securityPremiumSub: {
-    fontSize: 12,
-    color: SEC.textMuted,
-    fontWeight: '500',
-    marginTop: 4,
   },
   securityPremiumDropdown: {
     flexDirection: 'row',

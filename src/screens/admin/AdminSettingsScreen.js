@@ -17,24 +17,30 @@ import AmbientBackground from '../../components/AmbientBackground';
 import { useAuth } from '../../context/AuthContext';
 import { isModuleVisible } from '../../constants/roles';
 
-const SETTINGS_ACTIONS = [
+const SETTINGS_SECTIONS = [
   {
-    id: 'recordPatrol',
-    title: 'Patrolling',
-    subtitle: 'Record patrol with photo and location',
-    icon: 'walk-outline',
-    color: '#0F766E',
-    moduleId: 'Security',
-    homeAction: 'recordPatrol',
-  },
-  {
-    id: 'addPromotions',
-    title: 'Book Promotion',
-    subtitle: 'Dates, vendor, board member & GST 18%',
-    icon: 'megaphone-outline',
-    color: '#D97706',
-    moduleId: 'promotions',
-    stackScreen: 'AdminPromotions',
+    label: 'Actions',
+    items: [
+      {
+        id: 'recordPatrol',
+        title: 'Patrolling',
+        subtitle: 'Record patrol from Home → Security',
+        icon: 'walk-outline',
+        color: '#0F766E',
+        moduleId: 'Security',
+        homeAction: 'recordPatrol',
+      },
+      {
+        id: 'addPromotions',
+        title: 'Book Promotion',
+        subtitle: 'Dates, vendor, board member & GST 18%',
+        icon: 'megaphone-outline',
+        color: '#D97706',
+        moduleId: 'promotions',
+        stackScreen: 'AdminPromotions',
+        params: { openForm: true },
+      },
+    ],
   },
 ];
 
@@ -43,13 +49,17 @@ export default function AdminSettingsScreen({ navigation }) {
   const tabBarH = useSafeBottomTabBarHeight();
   const { logout, user } = useAuth();
 
-  const actions = useMemo(
+  const sections = useMemo(
     () =>
-      SETTINGS_ACTIONS.filter((a) =>
-        a.stackScreen === 'AdminPromotions'
-          ? isModuleVisible('promotions', user?.apiRole)
-          : isModuleVisible(a.moduleId, user?.apiRole),
-      ),
+      SETTINGS_SECTIONS.map((section) => ({
+        ...section,
+        items: section.items.filter((a) => {
+          if (a.stackScreen === 'AdminPromotions') {
+            return isModuleVisible('promotions', user?.apiRole);
+          }
+          return isModuleVisible(a.moduleId, user?.apiRole);
+        }),
+      })).filter((s) => s.items.length > 0),
     [user?.apiRole],
   );
 
@@ -57,7 +67,7 @@ export default function AdminSettingsScreen({ navigation }) {
 
   const onActionPress = (action) => {
     if (action.stackScreen) {
-      stackNav?.navigate(action.stackScreen, { openForm: true });
+      stackNav?.navigate(action.stackScreen, action.params ?? {});
       return;
     }
     if (action.homeAction) {
@@ -79,37 +89,41 @@ export default function AdminSettingsScreen({ navigation }) {
             <Ionicons name="log-out-outline" size={22} color={COLORS.white} />
           </TouchableOpacity>
         </View>
-        <Text style={styles.headerSub}>Quick actions & society preferences</Text>
+        <Text style={styles.headerSub}>Quick actions & society tools</Text>
       </LinearGradient>
 
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingBottom: tabBarH + insets.bottom + 24 },
+          { paddingBottom: tabBarH + 24 },
         ]}
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.sectionLabel}>Actions</Text>
-        {actions.length === 0 ? (
-          <Text style={styles.emptyHint}>No actions available for your role.</Text>
+        {sections.length === 0 ? (
+          <Text style={styles.emptyHint}>No settings available for your role.</Text>
         ) : (
-          actions.map((action) => (
-            <TouchableOpacity
-              key={action.id}
-              style={styles.actionCard}
-              activeOpacity={0.85}
-              onPress={() => onActionPress(action)}
-            >
-              <View style={[styles.actionIcon, { backgroundColor: `${action.color}22` }]}>
-                <Ionicons name={action.icon} size={24} color={action.color} />
-              </View>
-              <View style={styles.actionText}>
-                <Text style={styles.actionTitle}>{action.title}</Text>
-                <Text style={styles.actionSub}>{action.subtitle}</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={20} color={DARK.label} />
-            </TouchableOpacity>
+          sections.map((section) => (
+            <View key={section.label} style={styles.sectionBlock}>
+              <Text style={styles.sectionLabel}>{section.label}</Text>
+              {section.items.map((action) => (
+                <TouchableOpacity
+                  key={action.id}
+                  style={styles.actionCard}
+                  activeOpacity={0.85}
+                  onPress={() => onActionPress(action)}
+                >
+                  <View style={[styles.actionIcon, { backgroundColor: `${action.color}22` }]}>
+                    <Ionicons name={action.icon} size={24} color={action.color} />
+                  </View>
+                  <View style={styles.actionText}>
+                    <Text style={styles.actionTitle}>{action.title}</Text>
+                    <Text style={styles.actionSub}>{action.subtitle}</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color={DARK.label} />
+                </TouchableOpacity>
+              ))}
+            </View>
           ))
         )}
       </ScrollView>
@@ -153,6 +167,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 20,
   },
+  sectionBlock: { marginBottom: 8 },
   sectionLabel: {
     fontSize: SIZES.fontXs,
     fontWeight: '700',

@@ -22,23 +22,18 @@ import { pickGeoPhotoFromCamera, pickGeoPhotoFromLibrary } from '../../utils/geo
 import { fetchStaff } from '../../modules/security/services/securityService';
 import {
   fetchOpenHkDutySession,
+  fetchOnDutyHkSessions,
   postHkDutyCheckIn,
   postHkDutyCheckOut,
 } from '../../modules/housekeeping/services/housekeepingService';
+import {
+  filterNamesAvailableForCheckIn,
+  isStaffOnDuty,
+} from '../../modules/security/utils/dutyStaffOptions';
 import { ensureValidAccessToken } from '../../modules/shared/services/authService';
 
-const LOCATION_OPTIONS = [
-  'Main Gate',
-  'Service / Rear Gate',
-  'Tower A — Lobby & ground',
-  'Tower B — Lobby & ground',
-  'Common area / Clubhouse',
-  'Basement / Parking',
-  'STP / WTP / Pool',
-  'Perimeter / External',
-];
-
 const HK_ROLES = ADMIN_MANPOWER_DEPLOYMENT.filter((r) => r.category === 'FM_HK').map((r) => r.role);
+const HK_DUTY_DEFAULT_LOCATION = 'On site';
 
 const PHOTO_THEME = {
   accent: DARK.teal,
@@ -70,14 +65,13 @@ export default function HkDutyScreen({ navigation, route }) {
 
   const [dutyMode, setDutyMode] = useState(initialMode);
   const [staffName, setStaffName] = useState(user?.name || '');
-  const [locationName, setLocationName] = useState(LOCATION_OPTIONS[0]);
   const [designation, setDesignation] = useState(HK_ROLES[0] || 'Housekeeping Staff');
   const [photo, setPhoto] = useState(null);
   const [openSession, setOpenSession] = useState(null);
   const [roster, setRoster] = useState([]);
+  const [onDutySessions, setOnDutySessions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [locationPickerOpen, setLocationPickerOpen] = useState(false);
   const [staffPickerOpen, setStaffPickerOpen] = useState(false);
   const [designationPickerOpen, setDesignationPickerOpen] = useState(false);
 
@@ -105,9 +99,15 @@ export default function HkDutyScreen({ navigation, route }) {
       try {
         const accessToken = (await ensureValidAccessToken()) || token;
         if (accessToken) {
-          const staff = await fetchStaff(accessToken);
+          const [staff, onDuty] = await Promise.all([
+            fetchStaff(accessToken),
+            fetchOnDutyHkSessions(accessToken),
+          ]);
           if (!cancelled && Array.isArray(staff)) {
             setRoster(staff.filter((s) => (s.isActive ?? s.IsActive) !== false));
+          }
+          if (!cancelled) {
+            setOnDutySessions(Array.isArray(onDuty) ? onDuty : []);
           }
         }
         if (!cancelled) await refreshOpenSession(staffName);
@@ -128,15 +128,27 @@ export default function HkDutyScreen({ navigation, route }) {
     return [...new Set(names)];
   }, [roster, staffName]);
 
+  const checkInStaffOptions = useMemo(
+    () => filterNamesAvailableForCheckIn(rosterNames, onDutySessions),
+    [rosterNames, onDutySessions],
+  );
+
+  const staffPickerOptions =
+    dutyMode === 'check-in' && !isOnDuty
+      ? checkInStaffOptions
+      : rosterNames;
+
   const onCheckIn = async () => {
     const name = staffName.trim();
-    const loc = locationName.trim();
     if (!name) {
       Alert.alert('Staff name', 'Enter or select your name.');
       return;
     }
-    if (!loc) {
-      Alert.alert('Location', 'Select where you are reporting.');
+    if (isStaffOnDuty(name, onDutySessions)) {
+      Alert.alert(
+        'Already on duty',
+        `${name} is already checked in. Check out before a new check-in.`,
+      );
       return;
     }
     if (!photo?.uri && !photo?.file) {
@@ -154,7 +166,7 @@ export default function HkDutyScreen({ navigation, route }) {
     try {
       const session = await postHkDutyCheckIn(accessToken, {
         staffName: name,
-        locationName: loc,
+        locationName: HK_DUTY_DEFAULT_LOCATION,
         designation: designation.trim() || null,
         photo,
         latitude: photo.latitude ?? null,
@@ -164,7 +176,9 @@ export default function HkDutyScreen({ navigation, route }) {
       });
       setOpenSession(session);
       setPhoto(null);
-      Alert.alert('Checked in', `On duty at ${loc} since ${formatTime(session.entryAt)}.`);
+      const onDuty = await fetchOnDutyHkSessions(accessToken);
+      setOnDutySessions(Array.isArray(onDuty) ? onDuty : []);
+      Alert.alert('Checked in', `On duty since ${formatTime(session.entryAt)}.`);
     } catch (err) {
       Alert.alert('Check-in failed', err?.message || 'Could not save check-in.');
     } finally {
@@ -240,9 +254,7 @@ export default function HkDutyScreen({ navigation, route }) {
               <Ionicons name="radio-button-on" size={20} color="#22C55E" />
               <View style={styles.statusTextWrap}>
                 <Text style={styles.statusTitle}>On duty</Text>
-                <Text style={styles.statusSub}>
-                  {openSession.staffName} · {openSession.locationName}
-                </Text>
+                <Text style={styles.statusSub}>{openSession.staffName}</Text>
                 <Text style={styles.statusMeta}>Since {formatTime(openSession.entryAt)}</Text>
               </View>
             </View>
@@ -256,7 +268,16 @@ export default function HkDutyScreen({ navigation, route }) {
           <Text style={styles.label}>Staff name</Text>
           <TouchableOpacity
             style={styles.pickerBtn}
-            onPress={() => setStaffPickerOpen(true)}
+            onPress={() => {
+              if (dutyMode === 'check-in' && !isOnDuty && checkInStaffOptions.length === 0) {
+                Alert.alert(
+                  'Everyone on duty',
+                  'All listed staff are already checked in. Check someone out first.',
+                );
+                return;
+              }
+              setStaffPickerOpen(true);
+            }}
             activeOpacity={0.85}
           >
             <Text style={styles.pickerBtnText}>{staffName || 'Select staff'}</Text>
@@ -265,16 +286,6 @@ export default function HkDutyScreen({ navigation, route }) {
 
           {dutyMode === 'check-in' && !isOnDuty ? (
             <>
-              <Text style={styles.label}>Location</Text>
-              <TouchableOpacity
-                style={styles.pickerBtn}
-                onPress={() => setLocationPickerOpen(true)}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.pickerBtnText}>{locationName}</Text>
-                <Ionicons name="chevron-down" size={18} color={DARK.muted} />
-              </TouchableOpacity>
-
               <Text style={styles.label}>Designation</Text>
               <TouchableOpacity
                 style={styles.pickerBtn}
@@ -358,19 +369,15 @@ export default function HkDutyScreen({ navigation, route }) {
       )}
 
       <PickerModal
-        visible={locationPickerOpen}
-        title="Select location"
-        options={LOCATION_OPTIONS}
-        onSelect={(v) => {
-          setLocationName(v);
-          setLocationPickerOpen(false);
-        }}
-        onClose={() => setLocationPickerOpen(false)}
-      />
-      <PickerModal
         visible={staffPickerOpen}
         title="Select staff"
-        options={rosterNames.length ? rosterNames : [staffName || 'Staff']}
+        options={
+          staffPickerOptions.length
+            ? staffPickerOptions
+            : dutyMode === 'check-in' && !isOnDuty
+              ? []
+              : [staffName || 'Staff']
+        }
         onSelect={(v) => {
           setStaffName(v);
           setStaffPickerOpen(false);

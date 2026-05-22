@@ -24,7 +24,9 @@ public sealed class CheckInHousekeepingDutyCommandHandler
     {
         var body = request.Body;
         var staffName = body.StaffName.Trim();
-        var locationName = body.LocationName.Trim();
+        var locationName = string.IsNullOrWhiteSpace(body.LocationName)
+            ? "On site"
+            : body.LocationName.Trim();
 
         var openForStaff = await _db.HousekeepingDutySessions
             .Where(s => s.Status == DutySessionStatuses.Open &&
@@ -71,7 +73,7 @@ public sealed class CheckInHousekeepingDutyCommandValidator : AbstractValidator<
     public CheckInHousekeepingDutyCommandValidator()
     {
         RuleFor(x => x.Body.StaffName).NotEmpty().MaximumLength(200);
-        RuleFor(x => x.Body.LocationName).NotEmpty().MaximumLength(200);
+        RuleFor(x => x.Body.LocationName).MaximumLength(200);
         RuleFor(x => x.Body.PhotoUrls).NotEmpty().WithMessage("Check-in photo is required.");
         RuleForEach(x => x.Body.PhotoUrls).Must(u => !string.IsNullOrWhiteSpace(u));
     }

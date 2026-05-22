@@ -25,8 +25,18 @@ export const SEC = {
   saveOnAccent: SECURITY.bg,
 };
 
-/** Housekeeping uses the same LedgerX palette as Security ops. */
-export const HK = { ...SEC };
+/** Housekeeping — teal accent, same dark shell as Security ops. */
+export const HK = {
+  ...SEC,
+  accent: '#14B8A6',
+  accentDim: 'rgba(20, 184, 166, 0.14)',
+  accentBorder: 'rgba(45, 212, 191, 0.4)',
+  teal: '#14B8A6',
+  tealDim: 'rgba(20, 184, 166, 0.12)',
+  saveAccent: '#0F766E',
+  saveOnAccent: '#f0fdfa',
+  headerGradient: ['#0F766E', '#14B8A6'],
+};
 
 export const WATER = {
   ...shell,

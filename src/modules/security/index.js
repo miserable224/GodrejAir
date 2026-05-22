@@ -8,6 +8,10 @@ export {
   aggregateHoursByStaff,
 } from './utils/dutyDuration';
 export {
+  filterNamesAvailableForCheckIn,
+  isStaffOnDuty,
+} from './utils/dutyStaffOptions';
+export {
   normalizeRoleKey,
   mergeSecurityOpsDashboardIntoCounts,
   mergeAttendanceSummariesIntoCounts,

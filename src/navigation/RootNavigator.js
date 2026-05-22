@@ -1,11 +1,14 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Platform, StyleSheet, View, ActivityIndicator, Text } from 'react-native';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, DARK } from '../constants/theme';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
+import { tabBarTotalHeight } from '../utils/safeTabBarHeight';
+import AppTabBar from './AppTabBar';
 
 import LoginScreen from '../screens/auth/LoginScreen';
 import ResidentHomeScreen from '../screens/resident/HomeScreen';
@@ -17,6 +20,7 @@ import {
 } from '../screens/PlaceholderScreens';
 import GuardDutyScreen from '../screens/security/GuardDutyScreen';
 import HkDutyScreen from '../screens/housekeeping/HkDutyScreen';
+import AdminDutyAttendanceScreen from '../screens/admin/AdminDutyAttendanceScreen';
 
 const Stack = createStackNavigator();
 const BottomTab = createBottomTabNavigator();
@@ -34,34 +38,52 @@ const navTheme = {
   },
 };
 
-const tabBarStyle = {
-  backgroundColor: DARK.card,
-  borderTopWidth: 1,
-  borderTopColor: DARK.inputBorder,
-  paddingBottom: Platform.OS === 'ios' ? 20 : 8,
-  paddingTop: 8,
-  height: Platform.OS === 'ios' ? 85 : 65,
-  ...Platform.select({
-    web: { boxShadow: '0 -8px 32px rgba(0, 0, 0, 0.4)' },
-    default: {
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: -4 },
-      shadowOpacity: 0.3,
-      shadowRadius: 16,
-      elevation: 12,
-    },
-  }),
+const sharedTabOptions = {
+  headerShown: false,
+  tabBar: (props) => <AppTabBar {...props} />,
+  tabBarActiveTintColor: DARK.teal,
+  tabBarInactiveTintColor: DARK.label,
+  tabBarHideOnKeyboard: true,
+  tabBarShowLabel: true,
+  tabBarLabelVisibilityMode: 'labeled',
+  tabBarLabelPosition: 'below-icon',
+  tabBarLabelStyle: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 4,
+    marginBottom: 2,
+    lineHeight: 14,
+  },
+  tabBarIconStyle: { marginTop: 0 },
 };
 
+function useTabBarScreenOptions() {
+  const insets = useSafeAreaInsets();
+  const tabBarHeight = tabBarTotalHeight(insets);
+
+  return useMemo(
+    () => ({
+      ...sharedTabOptions,
+      tabBarStyle: {
+        height: tabBarHeight,
+        backgroundColor: DARK.card,
+        borderTopWidth: 1,
+        borderTopColor: DARK.inputBorder,
+        paddingTop: 4,
+        overflow: 'visible',
+      },
+    }),
+    [tabBarHeight],
+  );
+}
+
 function ResidentTabs() {
+  const tabOptions = useTabBarScreenOptions();
+
   return (
     <BottomTab.Navigator
       screenOptions={({ route }) => ({
-        headerShown: false,
-        tabBarActiveTintColor: DARK.teal,
-        tabBarInactiveTintColor: DARK.label,
-        tabBarStyle,
-        tabBarLabelStyle: { fontSize: 11, fontWeight: '700', marginTop: 2 },
+        ...tabOptions,
         tabBarIcon: ({ color, focused }) => {
           const icons = {
             Home: focused ? 'home' : 'home-outline',
@@ -88,15 +110,12 @@ function ResidentTabs() {
 function AdminBottomTabs() {
   const { permissions } = useAuth();
   const homeOnly = permissions?.hasLimitedAdminNav;
+  const tabOptions = useTabBarScreenOptions();
 
   return (
     <BottomTab.Navigator
       screenOptions={({ route }) => ({
-        headerShown: false,
-        tabBarActiveTintColor: DARK.teal,
-        tabBarInactiveTintColor: DARK.label,
-        tabBarStyle,
-        tabBarLabelStyle: { fontSize: 11, fontWeight: '700', marginTop: 2 },
+        ...tabOptions,
         tabBarIcon: ({ color, focused }) => {
           const icons = {
             Home: focused ? 'grid' : 'grid-outline',
@@ -111,11 +130,9 @@ function AdminBottomTabs() {
     >
       <BottomTab.Screen name="Home" component={AdminDashboardScreen} options={{ title: 'Home' }} />
       {!homeOnly ? (
-        <>
-          <BottomTab.Screen name="Tenant" component={AdminTenantScreen} options={{ title: 'Tenant' }} />
-          <BottomTab.Screen name="Settings" component={AdminSettingsScreen} />
-        </>
+        <BottomTab.Screen name="Tenant" component={AdminTenantScreen} options={{ title: 'Tenant' }} />
       ) : null}
+      <BottomTab.Screen name="Settings" component={AdminSettingsScreen} />
     </BottomTab.Navigator>
   );
 }
@@ -129,6 +146,7 @@ function AdminStack() {
       <Stack.Screen name="AdminWorkforce" component={WorkforceScreen} />
       <Stack.Screen name="GuardDuty" component={GuardDutyScreen} />
       <Stack.Screen name="HkDuty" component={HkDutyScreen} />
+      <Stack.Screen name="AdminDutyAttendance" component={AdminDutyAttendanceScreen} />
     </Stack.Navigator>
   );
 }

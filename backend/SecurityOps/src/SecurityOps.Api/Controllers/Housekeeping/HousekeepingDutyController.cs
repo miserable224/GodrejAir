@@ -12,7 +12,7 @@ namespace SecurityOps.Api.Controllers.Housekeeping;
 [ApiController]
 [Route("api/housekeeping/duty")]
 [Tags("Housekeeping")]
-[Authorize(Roles = AppRoles.FmHkStaff)]
+[Authorize(Roles = AppRoles.AllStaff)]
 public sealed class HousekeepingDutyController : ControllerBase
 {
     private readonly IMediator _mediator;

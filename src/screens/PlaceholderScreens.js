@@ -82,7 +82,7 @@ const PlaceholderScreen = ({
         </View>
         {!singleLineHeader ? <Text style={styles.headerSub}>{subtitle}</Text> : null}
       </LinearGradient>
-      <View style={[styles.center, { paddingBottom: contentBottomInset + insets.bottom + 20 }]}>
+      <View style={[styles.center, { paddingBottom: contentBottomInset + 20 }]}>
         <View style={[styles.iconBig, { backgroundColor: color + '18' }]}>
           <Ionicons name={icon} size={48} color={color} />
         </View>

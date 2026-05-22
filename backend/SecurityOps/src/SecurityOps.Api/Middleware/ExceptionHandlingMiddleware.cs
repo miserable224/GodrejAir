@@ -67,7 +67,9 @@ public sealed class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Ex
                 {
                     PostgresErrorCodes.UndefinedTable => (
                         HttpStatusCode.ServiceUnavailable,
-                        "Database tables missing. Run Supabase migrations (009_security_app_users.sql and later) in the SQL editor."),
+                        pg.MessageText.Contains("housekeeping_duty_sessions", StringComparison.OrdinalIgnoreCase)
+                            ? "Housekeeping duty table missing. Run Supabase migration 021_housekeeping_duty_sessions.sql in the SQL editor."
+                            : "Database tables missing. Run Supabase migrations (009_security_app_users.sql and later) in the SQL editor."),
                     PostgresErrorCodes.InvalidPassword or "28P01" => (
                         HttpStatusCode.ServiceUnavailable,
                         "Database login failed. Check Supabase__ConnectionString on Render."),

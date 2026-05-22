@@ -360,6 +360,9 @@ public sealed class ApplicationDbContext : DbContext, IApplicationDbContext
             e.Property(x => x.RoleCode).HasMaxLength(50).IsRequired();
             e.Property(x => x.RoleName).HasMaxLength(120).IsRequired();
             e.Property(x => x.MonthlyRate).HasPrecision(12, 2);
+            e.Property(x => x.HeadcountSanctioned).HasColumnName("headcount_sanctioned");
+            e.Property(x => x.ShiftTimings).HasColumnName("shift_timings").HasMaxLength(120);
+            e.Property(x => x.SkillType).HasColumnName("skill_type").HasMaxLength(40);
             e.Property(x => x.Shift1Sanctioned).HasColumnName("shift1_sanctioned");
             e.Property(x => x.Shift2Sanctioned).HasColumnName("shift2_sanctioned");
             e.Property(x => x.IsActive).HasColumnName("is_active");

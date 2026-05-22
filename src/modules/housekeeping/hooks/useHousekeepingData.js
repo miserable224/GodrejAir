@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { fetchHousekeepingDashboard, invalidateHousekeepingCache } from '../services/housekeepingService';
 import { resolveWorkforceDateParams } from '../utils/workforceDateParams';
 import { applyDeploymentEntriesToCounts } from '../../security/utils/securityRoleMapping';
+import { buildHkContractDisplayRows } from '../utils/hkBilling';
+import { HK_DEMO_SHIFT_ACTUALS } from '../constants/hkContracts';
 
 const DEBOUNCE_MS = 400;
 
@@ -9,9 +11,16 @@ function mapApiRolesToRows(apiRoles) {
   if (!apiRoles?.length) return [];
   return apiRoles.map((r, i) => ({
     id: r.roleCode || `hk-api-${i}`,
+    roleCode: r.roleCode,
     category: 'FM_HK',
     role: r.role ?? r.Role,
     expected: Number(r.expected ?? r.Expected) || 0,
+    expectedS1: Number(r.expectedS1) || Number(r.expected) || 0,
+    expectedS2: Number(r.expectedS2) || Number(r.expected) || 0,
+    headcountSanctioned: Number(r.headcountSanctioned) || 0,
+    monthlyRate: Number(r.monthlyRate) || 0,
+    shiftTimings: r.shiftTimings ?? '',
+    skillType: r.skillType ?? 'Skilled',
     actualS1: Number(r.actualS1 ?? r.ActualS1) || 0,
     actualS2: Number(r.actualS2 ?? r.ActualS2) || 0,
   }));
@@ -94,7 +103,11 @@ export function useHousekeepingData({
     load();
   }, [load]);
 
-  const roleRows = useMemo(() => mapApiRolesToRows(dashboard?.roles), [dashboard]);
+  const roleRows = useMemo(() => {
+    const fromApi = mapApiRolesToRows(dashboard?.roles);
+    if (fromApi.length) return fromApi;
+    return buildHkContractDisplayRows([], [], HK_DEMO_SHIFT_ACTUALS);
+  }, [dashboard]);
 
   return {
     dashboard,

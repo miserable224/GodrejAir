@@ -92,10 +92,17 @@ function normalizeHkDashboard(raw) {
     totalRequired: Number(raw.totalRequired ?? raw.TotalRequired) || 0,
     totalShortage: Number(raw.totalShortage ?? raw.TotalShortage) || 0,
     estimatedWages: Number(raw.estimatedWages ?? raw.EstimatedWages) || 0,
+    contractMonthlyTotal: Number(raw.contractMonthlyTotal ?? raw.ContractMonthlyTotal) || 0,
     roles: roles.map((r) => ({
       roleCode: r.roleCode ?? r.RoleCode,
       role: r.role ?? r.Role,
       expected: Number(r.expected ?? r.Expected) || 0,
+      expectedS1: Number(r.expectedShift1 ?? r.ExpectedShift1) || 0,
+      expectedS2: Number(r.expectedShift2 ?? r.ExpectedShift2) || 0,
+      headcountSanctioned: Number(r.headcountSanctioned ?? r.HeadcountSanctioned) || 0,
+      monthlyRate: Number(r.monthlyRate ?? r.MonthlyRate) || 0,
+      shiftTimings: r.shiftTimings ?? r.ShiftTimings ?? '',
+      skillType: r.skillType ?? r.SkillType ?? 'Skilled',
       actualS1: Number(r.actualS1 ?? r.ActualS1) || 0,
       actualS2: Number(r.actualS2 ?? r.ActualS2) || 0,
       deploymentCount: Number(r.deploymentCount ?? r.DeploymentCount) || 0,
@@ -131,11 +138,16 @@ async function photoToUploadFile(photo) {
   return Object.assign(blob, { name, type });
 }
 
-async function readApiError(res) {
-  let detail = res.statusText;
+async function readApiError(res, fallback) {
+  let detail = fallback || res.statusText;
   try {
-    const body = await res.json();
-    detail = body?.message || body?.error || detail;
+    const body = await parseJsonResponse(res);
+    if (Array.isArray(body?.errors) && body.errors.length > 0) {
+      return body.errors.join(' ');
+    }
+    if (typeof body?.message === 'string' && body.message) return body.message;
+    if (typeof body?.error === 'string' && body.error) return body.error;
+    if (typeof body?.title === 'string' && body.title) return body.title;
   } catch {
     /* ignore */
   }
@@ -293,7 +305,7 @@ export async function postHkDutyCheckIn(token, payload, signal) {
 
   const body = {
     staffName: (staffName || '').trim(),
-    locationName: (locationName || '').trim(),
+    locationName: (locationName || 'On site').trim() || 'On site',
     designation: designation?.trim() || null,
     entryAt: capturedAt || entryAt || new Date().toISOString(),
     latitude: latitude ?? null,
@@ -310,13 +322,28 @@ export async function postHkDutyCheckIn(token, payload, signal) {
     signal,
   }, apiNetworkHint());
 
+  if (res.status === 204) {
+    throw new Error(
+      'Check-in returned empty response (204). Confirm the POST row in Network, not the OPTIONS preflight.',
+    );
+  }
+
   if (!res.ok) {
+    const detail = await readApiError(res);
     if (res.status === 404) throw new Error(HK_DUTY_DEPLOY_MSG);
-    throw new Error(`Check-in failed (${res.status}): ${await readApiError(res)}`);
+    if (res.status === 403) {
+      throw new Error(
+        detail || 'Not allowed to record housekeeping duty. Sign in with an operations role (FM, Admin, Supervisor).',
+      );
+    }
+    throw new Error(`Check-in failed (${res.status}): ${detail}`);
   }
 
   invalidateHousekeepingCache();
   const json = await parseJsonResponse(res);
+  if (json.empty || json.data == null) {
+    throw new Error('Check-in succeeded but server returned no data. Redeploy the latest API.');
+  }
   return normalizeHkDutySession(json.data);
 }
 
