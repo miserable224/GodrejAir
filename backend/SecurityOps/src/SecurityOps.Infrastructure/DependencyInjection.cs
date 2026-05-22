@@ -27,6 +27,7 @@ public static class DependencyInjection
 
         services.AddScoped<IApplicationDbContext>(sp => sp.GetRequiredService<ApplicationDbContext>());
         services.AddSingleton<ISecurityPhotoStorage, LocalSecurityPhotoStorage>();
+        services.AddSingleton<IPromotionReceiptStorage, LocalPromotionReceiptStorage>();
         return services;
     }
 }

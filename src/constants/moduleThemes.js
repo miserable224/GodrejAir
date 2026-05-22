@@ -40,6 +40,16 @@ export const WATER = {
   headerGradient: ['#0c1929', '#0b0e14'],
 };
 
+export const PROMO = {
+  ...shell,
+  accent: '#D97706',
+  accentDim: 'rgba(217, 119, 6, 0.14)',
+  accentBorder: 'rgba(217, 119, 6, 0.4)',
+  saveAccent: '#D97706',
+  saveOnAccent: '#0b0e14',
+  headerGradient: ['#292017', '#0b0e14'],
+};
+
 export { SEC_FONTS };
 
-export const MODULE_THEMES = { security: SEC, hk: HK, water: WATER };
+export const MODULE_THEMES = { security: SEC, hk: HK, water: WATER, promo: PROMO };

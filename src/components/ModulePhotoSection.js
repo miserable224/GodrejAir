@@ -97,7 +97,7 @@ export default function ModulePhotoSection({
             resizeMode="cover"
             accessibilityLabel="Selected photo preview"
           />
-          <Text style={styles.caption} numberOfLines={3}>
+          <Text style={styles.caption} numberOfLines={4}>
             {formatGeoCaption(photo)}
           </Text>
           {onRemovePhoto ? (

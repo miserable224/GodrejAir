@@ -19,6 +19,9 @@ function authNetworkHint() {
   if (!origin) {
     return 'Cannot reach the login API. In Vercel set EXPO_PUBLIC_API_URL to https://godrejair.onrender.com and redeploy.';
   }
+  if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+    return `Cannot reach ${origin}/api/auth/login. Start the API: cd backend/SecurityOps/src/SecurityOps.Api && dotnet run --launch-profile http`;
+  }
   return `Cannot reach ${origin}/api/auth/login. If using Render free tier, wait 30–60s and try again.`;
 }
 
