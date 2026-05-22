@@ -40,7 +40,6 @@ import { COLORS, SIZES, SHADOWS, DARK } from '../../constants/theme';
 import AmbientBackground from '../../components/AmbientBackground';
 import BrandWordmark from '../../components/BrandWordmark';
 import SecurityFormModal, { SecSaveButton } from '../../components/SecurityFormModal';
-import HousekeepingDeploymentForm from '../../components/HousekeepingDeploymentForm';
 import RentalsModulePanel from '../../components/RentalsModulePanel';
 import {
   RentalsShopForm,
@@ -99,7 +98,6 @@ import {
   postMobilePatrol,
   postStaffMember,
   useSecurityData,
-  useDeploymentQueue,
   applyDeploymentEntriesToCounts,
   normalizeRoleKey,
 } from '../../modules/security';
@@ -107,7 +105,12 @@ import {
   mergeHkDeploymentOverlay,
   useHousekeepingData,
   invalidateHousekeepingCache,
-  postBulkHousekeepingDeployments,
+  postHkDutyCheckIn,
+  postHkDutyCheckOut,
+  fetchOpenHkDutySession,
+  fetchHkDutySessionsRange,
+  fetchOnDutyHkSessions,
+  resolveWorkforceDateParams,
 } from '../../modules/housekeeping';
 import { SEC, SEC_FONTS, SEC_PLACEHOLDER } from '../../constants/securityTheme';
 
@@ -686,6 +689,82 @@ export default function AdminDashboardScreen({ navigation, route }) {
     return () => clearInterval(id);
   }, [expandedId, dutySessions]);
 
+  const [hkDutySessions, setHkDutySessions] = useState([]);
+  const [hkDutySessionsLoading, setHkDutySessionsLoading] = useState(false);
+  const [hkDutySessionsTick, setHkDutySessionsTick] = useState(0);
+  const [hkDutyModal, setHkDutyModal] = useState(null);
+  const [hkCheckoutSessionId, setHkCheckoutSessionId] = useState(null);
+  const [isSavingHkDuty, setIsSavingHkDuty] = useState(false);
+  const [committedHkEntries, setCommittedHkEntries] = useState([]);
+
+  const hkDutyDateParams = useMemo(
+    () => resolveWorkforceDateParams(staffTimePreset, staffDateRange),
+    [staffTimePreset, staffDateRange.from, staffDateRange.to],
+  );
+
+  const hkDutyHoursByStaff = useMemo(
+    () => aggregateHoursByStaff(hkDutySessions),
+    [hkDutySessions, hkDutySessionsTick],
+  );
+
+  const displayHkDutyDuration = useCallback((session) => {
+    if (session.status === 'open' && session.entryAt) {
+      const mins = Math.max(
+        0,
+        Math.round((Date.now() - new Date(session.entryAt).getTime()) / 60000),
+      );
+      return `${formatDutyDurationMinutes(mins)} · on duty`;
+    }
+    return session.durationLabel || formatDutyDurationMinutes(session.durationMinutes);
+  }, [hkDutySessionsTick]);
+
+  useEffect(() => {
+    if (expandedId !== 'Workforce' || !token || !hkDutyDateParams.valid) {
+      setHkDutySessions([]);
+      return undefined;
+    }
+
+    let cancelled = false;
+    (async () => {
+      setHkDutySessionsLoading(true);
+      try {
+        const accessToken = (await ensureValidAccessToken()) || token;
+        if (!accessToken || cancelled) return;
+        const list = await fetchHkDutySessionsRange(accessToken, {
+          from: hkDutyDateParams.from,
+          to: hkDutyDateParams.to,
+        });
+        if (!cancelled) setHkDutySessions(list);
+      } catch (err) {
+        if (!cancelled) {
+          console.warn('HK duty sessions load:', err?.message);
+          setHkDutySessions([]);
+        }
+      } finally {
+        if (!cancelled) setHkDutySessionsLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    expandedId,
+    token,
+    hkDutyDateParams.from,
+    hkDutyDateParams.to,
+    hkDutyDateParams.valid,
+    hkDutySessionsTick,
+  ]);
+
+  useEffect(() => {
+    if (expandedId !== 'Workforce') return undefined;
+    const hasOpen = hkDutySessions.some((s) => s.status === 'open');
+    if (!hasOpen) return undefined;
+    const id = setInterval(() => setHkDutySessionsTick((t) => t + 1), 60000);
+    return () => clearInterval(id);
+  }, [expandedId, hkDutySessions]);
+
   useEffect(() => {
     if (!expandedId) return;
     const stillVisible = visibleDashboardSections.some((s) => s.id === expandedId);
@@ -697,11 +776,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
       const action = route.params?.settingsAction;
       if (!action) return;
 
-      if (action === 'addHousekeeping' && isModuleVisible('Workforce', user?.apiRole)) {
-        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-        setExpandedId('Workforce');
-        setRecordAddHkOpen(true);
-      } else if (action === 'recordPatrol' && isModuleVisible('Security', user?.apiRole)) {
+      if (action === 'recordPatrol' && isModuleVisible('Security', user?.apiRole)) {
         LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
         setExpandedId('Security');
         setRecordPatrolOpen(true);
@@ -718,22 +793,6 @@ export default function AdminDashboardScreen({ navigation, route }) {
   /** Guards checked in today — used for patrol staff picker until API refresh. */
   const [committedSecurityEntries, setCommittedSecurityEntries] = useState([]);
 
-  const {
-    entries: pendingHkEntries,
-    addEntry: addPendingHkEntry,
-    removeEntry: removePendingHkEntry,
-    clearEntries: clearPendingHkEntries,
-    count: pendingHkCount,
-  } = useDeploymentQueue();
-  const [committedHkEntries, setCommittedHkEntries] = useState([]);
-  const [recordAddHkOpen, setRecordAddHkOpen] = useState(false);
-  const [hkDeploymentForm, setHkDeploymentForm] = useState({
-    designation: '',
-    name: '',
-  });
-  const [hkDeploymentPhoto, setHkDeploymentPhoto] = useState(null);
-  const [hkPickerOpen, setHkPickerOpen] = useState(null);
-  const [isSavingHousekeeping, setIsSavingHousekeeping] = useState(false);
   const [recordStaffType, setRecordStaffType] = useState('Security');
   const [isSavingPatrol, setIsSavingPatrol] = useState(false);
   const [addStaffOpen, setAddStaffOpen] = useState(false);
@@ -847,12 +906,6 @@ export default function AdminDashboardScreen({ navigation, route }) {
   // staffCounts comes from useSecurityData hook (see above)
   const staffCounts = securityStaffCounts;
   const setStaffCounts = setSecurityStaffCounts;
-  const hkDesignationOptions = useMemo(
-    () =>
-      ADMIN_MANPOWER_DEPLOYMENT.filter((row) => row.category === 'FM_HK').map((row) => row.role),
-    [],
-  );
-
   const securityRoleDisplayRows = useMemo(() => {
     return applyDeploymentEntriesToCounts(staffCounts, committedSecurityEntries, 'Security').filter(
       (c) => c.category === 'Security',
@@ -874,10 +927,9 @@ export default function AdminDashboardScreen({ navigation, route }) {
   });
 
   const hkRoleDisplayRows = useMemo(() => {
-    const overlay = [...committedHkEntries, ...pendingHkEntries];
-    if (overlay.length) return mergeHkDeploymentOverlay(hkApiRoleRows, overlay);
+    if (committedHkEntries.length) return mergeHkDeploymentOverlay(hkApiRoleRows, committedHkEntries);
     return hkApiRoleRows;
-  }, [hkApiRoleRows, committedHkEntries, pendingHkEntries]);
+  }, [hkApiRoleRows, committedHkEntries]);
   const [activeShift, setActiveShift] = useState(1); // 1 or 2
   const [fmHkExpanded, setFmHkExpanded] = useState(false);
   const [securityExpanded, setSecurityExpanded] = useState(false);
@@ -892,9 +944,11 @@ export default function AdminDashboardScreen({ navigation, route }) {
   const designationOptions = useMemo(
     () =>
       ADMIN_MANPOWER_DEPLOYMENT.filter((row) =>
-        recordStaffType === 'FM_HK' ? row.category === 'FM_HK' : row.category === 'Security'
+        recordStaffType === 'FM_HK' || hkDutyModal != null
+          ? row.category === 'FM_HK'
+          : row.category === 'Security',
       ).map((row) => row.role),
-    [recordStaffType]
+    [recordStaffType, hkDutyModal],
   );
 
   const deploymentStaffNames = useMemo(() => {
@@ -923,11 +977,20 @@ export default function AdminDashboardScreen({ navigation, route }) {
     return [...new Set(names)].sort((a, b) => a.localeCompare(b));
   }, [dutySessions]);
 
+  const hkCheckoutNameOptions = useMemo(() => {
+    const names = hkDutySessions
+      .filter((s) => s.status === 'open')
+      .map((s) => s.staffName?.trim())
+      .filter(Boolean);
+    return [...new Set(names)].sort((a, b) => a.localeCompare(b));
+  }, [hkDutySessions]);
+
   const deploymentPickerOptions = useMemo(() => {
     if (deploymentPickerOpen === 'designation') return designationOptions;
     if (deploymentPickerOpen === 'location') return DEPLOYMENT_LOCATION_OPTIONS;
     if (deploymentPickerOpen === 'name') {
       if (securityDutyModal === 'check-out') return checkoutNameOptions;
+      if (hkDutyModal === 'check-out') return hkCheckoutNameOptions;
       return staffNameOptions;
     }
     return [];
@@ -936,23 +999,19 @@ export default function AdminDashboardScreen({ navigation, route }) {
     designationOptions,
     staffNameOptions,
     securityDutyModal,
+    hkDutyModal,
     checkoutNameOptions,
+    hkCheckoutNameOptions,
   ]);
 
-  const hkPickerOptions = useMemo(() => {
-    if (hkPickerOpen === 'designation') return hkDesignationOptions;
-    if (hkPickerOpen === 'name') return staffNameOptions;
-    return [];
-  }, [hkPickerOpen, hkDesignationOptions, staffNameOptions]);
-
-  const activePickerField = recordAddHkOpen
-    ? hkPickerOpen
-    : recordPatrolOpen && patrolPickerOpen
-      ? 'staff'
-      : deploymentPickerOpen;
-  const activePickerOptions = recordAddHkOpen
-    ? hkPickerOptions
-    : recordPatrolOpen && patrolPickerOpen
+  const activePickerField =
+    securityDutyModal != null || hkDutyModal != null
+      ? deploymentPickerOpen
+      : recordPatrolOpen && patrolPickerOpen
+        ? 'staff'
+        : null;
+  const activePickerOptions =
+    recordPatrolOpen && patrolPickerOpen
       ? patrolStaffNameOptions
       : deploymentPickerOptions;
 
@@ -1566,7 +1625,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
       return { hint: 'Reservoirs, meters & usage trends', icon: 'analytics-outline' };
     }
     if (section.id === 'Workforce') {
-      return { hint: 'Roster, attendance & vendor payouts', icon: 'clipboard-outline' };
+      return { hint: 'Check in/out · hours on site · roster', icon: 'clipboard-outline' };
     }
     if (section.id === 'Expenses') {
       return { hint: 'AMC, utilities & society spend', icon: 'pie-chart-outline' };
@@ -1666,9 +1725,30 @@ export default function AdminDashboardScreen({ navigation, route }) {
     { key: 'custom', label: 'Custom' },
   ];
 
+  const renderCollapsedDutyQuickActions = (onCheckIn, onCheckOut) => (
+    <View style={styles.collapsedDutyWrap}>
+      <TouchableOpacity
+        style={[styles.hubBtn, styles.hubBtnDuty, styles.collapsedDutyBtn]}
+        onPress={onCheckIn}
+        activeOpacity={0.85}
+      >
+        <Ionicons name="log-in-outline" size={16} color="#93C5FD" />
+        <Text style={styles.hubBtnTextDuty}>Check in</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={[styles.hubBtn, styles.hubBtnDutyOut, styles.collapsedDutyBtn]}
+        onPress={onCheckOut}
+        activeOpacity={0.85}
+      >
+        <Ionicons name="log-out-outline" size={16} color="#FCA5A5" />
+        <Text style={styles.hubBtnTextDutyOut}>Check out</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
   const renderWorkforceDetails = () => {
     const fmHkStaff = hkRoleDisplayRows;
-    const hkOverlay = [...committedHkEntries, ...pendingHkEntries];
+    const hkOverlay = committedHkEntries;
 
     const dailyTotal =
       hkDashboard?.totalDeployed ??
@@ -1698,6 +1778,14 @@ export default function AdminDashboardScreen({ navigation, route }) {
             <View style={styles.securityHeaderContent}>
               <View style={styles.securityHeaderLeft}>
                 <Text style={styles.securityPremiumTitle}>Housekeeping</Text>
+                <TouchableOpacity
+                  style={styles.hkFullScreenDutyLink}
+                  onPress={() => navigation.navigate('HkDuty')}
+                  hitSlop={8}
+                >
+                  <Ionicons name="expand-outline" size={16} color={SEC.gold} />
+                  <Text style={styles.hkFullScreenDutyLinkText}>Full screen</Text>
+                </TouchableOpacity>
               </View>
               <View style={styles.securityHeaderRight}>
                 <TouchableOpacity
@@ -1817,13 +1905,86 @@ export default function AdminDashboardScreen({ navigation, route }) {
 
             <View style={styles.hubActionRow}>
               <TouchableOpacity
-                style={[styles.hubBtn, styles.hubBtnIndividual]}
-                onPress={() => setRecordAddHkOpen(true)}
-                activeOpacity={0.85}
+                style={[styles.hubBtn, styles.hubBtnDuty]}
+                onPress={() => openHkDutyModal('check-in')}
               >
-                <Ionicons name="sparkles-outline" size={16} color={SEC.teal} />
-                <Text style={styles.hubBtnTextPatrol}>Add Housekeeping</Text>
+                <Ionicons name="log-in-outline" size={16} color="#93C5FD" />
+                <Text style={styles.hubBtnTextDuty}>Check in</Text>
               </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.hubBtn, styles.hubBtnDutyOut]}
+                onPress={() => openHkDutyModal('check-out')}
+              >
+                <Ionicons name="log-out-outline" size={16} color="#FCA5A5" />
+                <Text style={styles.hubBtnTextDutyOut}>Check out</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.dutyAttendanceSection}>
+              <Text style={styles.dutyAttendanceHeading}>Hours on site (check-in → check-out)</Text>
+              {hkDutySessionsLoading ? (
+                <ActivityIndicator size="small" color={SEC.teal} style={styles.securityLoader} />
+              ) : hkDutySessions.length === 0 ? (
+                <Text style={styles.dutyAttendanceEmpty}>
+                  No check-in records for {hkDutyDateParams.label || 'this period'}.
+                </Text>
+              ) : (
+                <>
+                  {hkDutyHoursByStaff.length > 0 ? (
+                    <View style={styles.dutyTotalsRow}>
+                      {hkDutyHoursByStaff.map((row) => (
+                        <View key={row.staffName} style={styles.dutyTotalChip}>
+                          <Text style={styles.dutyTotalName} numberOfLines={1}>
+                            {row.staffName}
+                          </Text>
+                          <Text style={styles.dutyTotalHours}>{row.label}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  ) : null}
+                  {hkDutySessions.map((session) => (
+                    <View
+                      key={session.id}
+                      style={[
+                        styles.dutySessionRow,
+                        session.status === 'open' && styles.dutySessionRowOpen,
+                      ]}
+                    >
+                      <View style={styles.dutySessionMain}>
+                        <Text style={styles.dutySessionName} numberOfLines={1}>
+                          {session.staffName}
+                        </Text>
+                        <Text style={styles.dutySessionLoc} numberOfLines={1}>
+                          {session.locationName}
+                          {session.entryShiftDisplay ? ` · ${session.entryShiftDisplay}` : ''}
+                        </Text>
+                        <Text style={styles.dutySessionTimes} numberOfLines={2}>
+                          In {formatDutyTime(session.entryAt)}
+                          {session.exitAt
+                            ? ` · Out ${formatDutyTime(session.exitAt)}`
+                            : ' · Still on duty'}
+                        </Text>
+                      </View>
+                      <View style={styles.dutySessionHoursWrap}>
+                        <Text
+                          style={[
+                            styles.dutySessionHours,
+                            session.status === 'open' && styles.dutySessionHoursOpen,
+                          ]}
+                        >
+                          {displayHkDutyDuration(session)}
+                        </Text>
+                        {session.durationHours != null && session.status !== 'open' ? (
+                          <Text style={styles.dutySessionHoursSub}>
+                            {session.durationHours}h total
+                          </Text>
+                        ) : null}
+                      </View>
+                    </View>
+                  ))}
+                </>
+              )}
             </View>
 
             <View style={styles.premiumRolesList}>
@@ -2222,6 +2383,41 @@ export default function AdminDashboardScreen({ navigation, route }) {
   }, [securityDutyModal]);
 
   useEffect(() => {
+    if (!hkDutyModal) {
+      setDeploymentForm({ designation: '', name: '', location: '' });
+      setStaffAttendancePhoto(null);
+      setDeploymentPickerOpen(null);
+      setHkCheckoutSessionId(null);
+      setRecordStaffType('Security');
+    }
+  }, [hkDutyModal]);
+
+  useEffect(() => {
+    if (hkDutyModal !== 'check-out' || !token) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const accessToken = (await ensureValidAccessToken()) || token;
+        if (!accessToken || cancelled) return;
+        const onDuty = await fetchOnDutyHkSessions(accessToken);
+        if (cancelled || !onDuty?.length) return;
+        setHkDutySessions((prev) => {
+          const byId = new Map(prev.map((s) => [s.id, s]));
+          for (const s of onDuty) {
+            if (s?.id) byId.set(s.id, s);
+          }
+          return [...byId.values()];
+        });
+      } catch (err) {
+        if (!cancelled) console.warn('HK on-duty list load:', err?.message);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hkDutyModal, token]);
+
+  useEffect(() => {
     if (securityDutyModal !== 'check-out' || !token) return undefined;
     let cancelled = false;
     (async () => {
@@ -2245,110 +2441,6 @@ export default function AdminDashboardScreen({ navigation, route }) {
       cancelled = true;
     };
   }, [securityDutyModal, token]);
-
-  const closeAddHkModal = useCallback(() => {
-    setHkPickerOpen(null);
-    setRecordAddHkOpen(false);
-    clearPendingHkEntries();
-    setHkDeploymentForm({ designation: '', name: '' });
-    setHkDeploymentPhoto(null);
-  }, [clearPendingHkEntries]);
-
-  const pickHkPhotoFromCamera = async () => {
-    try {
-      const photo = await pickGeoPhotoFromCamera();
-      if (photo) setHkDeploymentPhoto(photo);
-    } catch (err) {
-      Alert.alert('Camera', err?.message || 'Could not use camera.');
-    }
-  };
-
-  const buildDraftHkEntry = () => {
-    const designation = hkDeploymentForm.designation.trim();
-    const deployName = hkDeploymentForm.name.trim();
-    if (!designation || !deployName || !hkDeploymentPhoto?.uri) {
-      return null;
-    }
-    return {
-      designation,
-      staffName: deployName,
-      location: locationLabelFromPhoto(hkDeploymentPhoto),
-      photo: hkDeploymentPhoto,
-    };
-  };
-
-  const addHkToQueue = () => {
-    const draft = buildDraftHkEntry();
-    if (!draft) {
-      if (!hkDeploymentForm.designation.trim() || !hkDeploymentForm.name.trim()) {
-        Alert.alert('Missing details', 'Please select designation and staff name.');
-      } else {
-        Alert.alert('Photo required', 'Take a verification photo with the camera.');
-      }
-      return;
-    }
-    addPendingHkEntry(draft);
-    setHkDeploymentForm({ designation: '', name: '' });
-    setHkDeploymentPhoto(null);
-    setHkPickerOpen(null);
-  };
-
-  const collectHkItemsToSave = () => {
-    const items = pendingHkEntries.map((e) => ({
-      designation: e.designation,
-      staffName: e.staffName,
-      location: e.location || locationLabelFromPhoto(e.photo),
-      photo: e.photo,
-    }));
-    const draft = buildDraftHkEntry();
-    if (draft) items.push(draft);
-    return items;
-  };
-
-  const saveAllHkEntries = async () => {
-    const items = collectHkItemsToSave();
-    if (items.length === 0) {
-      Alert.alert('Nothing to save', 'Tap Add Housekeeping to queue at least one entry (with photo).');
-      return;
-    }
-
-    try {
-      setIsSavingHousekeeping(true);
-      const accessToken = (await ensureValidAccessToken()) || token;
-      if (!accessToken) {
-        Alert.alert('Not signed in', 'Please sign in again to save housekeeping logs.');
-        return;
-      }
-
-      const savedCount = await postBulkHousekeepingDeployments(
-        accessToken,
-        new Date().toISOString(),
-        items,
-      );
-
-      setCommittedHkEntries((prev) => [
-        ...prev,
-        ...items.map((item) => ({
-          designation: item.designation,
-          staffName: item.staffName,
-        })),
-      ]);
-      clearPendingHkEntries();
-      setHkDeploymentForm({ designation: '', name: '' });
-      setHkDeploymentPhoto(null);
-      setHkPickerOpen(null);
-      setRecordAddHkOpen(false);
-
-      Alert.alert('Success', `${savedCount ?? items.length} housekeeping log(s) saved.`);
-      invalidateHousekeepingCache();
-      refreshHkData();
-    } catch (err) {
-      console.error('Save housekeeping logs failed:', err);
-      Alert.alert('Error', err?.message || 'Could not save housekeeping logs.');
-    } finally {
-      setIsSavingHousekeeping(false);
-    }
-  };
 
   const buildDraftSecurityEntry = () => {
     const designation = deploymentForm.designation.trim();
@@ -2540,12 +2632,149 @@ export default function AdminDashboardScreen({ navigation, route }) {
   const openSecurityDutyModal = useCallback((mode) => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setExpandedId('Security');
+    setHkDutyModal(null);
     setSecurityDutyModal(mode);
     setCheckoutDutySessionId(null);
     setDeploymentForm({ designation: '', name: '', location: '' });
     setStaffAttendancePhoto(null);
     setDeploymentPickerOpen(null);
   }, []);
+
+  const findOpenHkDutySessionLocal = useCallback(
+    (staffName) => {
+      const needle = (staffName || '').trim().toLowerCase();
+      if (!needle) return null;
+      return (
+        hkDutySessions.find(
+          (s) => s.status === 'open' && s.staffName?.trim().toLowerCase() === needle,
+        ) ?? null
+      );
+    },
+    [hkDutySessions],
+  );
+
+  const applyHkCheckoutStaffSelection = useCallback(
+    async (staffName) => {
+      let open = findOpenHkDutySessionLocal(staffName);
+      if (!open?.id) {
+        const accessToken = (await ensureValidAccessToken()) || token;
+        if (accessToken) {
+          open = await fetchOpenHkDutySession(accessToken, staffName);
+        }
+      }
+      if (!open?.id) {
+        Alert.alert(
+          'Not checked in',
+          `${staffName} is not on duty. Select staff who has an active check-in.`,
+        );
+        setHkCheckoutSessionId(null);
+        setDeploymentForm((p) => ({ ...p, name: staffName, designation: '', location: '' }));
+        return;
+      }
+      setHkCheckoutSessionId(open.id);
+      setDeploymentForm({
+        name: open.staffName,
+        designation: open.designation || '',
+        location: open.locationName || '',
+      });
+    },
+    [findOpenHkDutySessionLocal, token],
+  );
+
+  const closeHkDutyModal = useCallback(() => {
+    setDeploymentPickerOpen(null);
+    setHkDutyModal(null);
+    setDeploymentForm({ designation: '', name: '', location: '' });
+    setStaffAttendancePhoto(null);
+    setHkCheckoutSessionId(null);
+    setRecordStaffType('Security');
+  }, []);
+
+  const openHkDutyModal = useCallback((mode) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setExpandedId('Workforce');
+    setSecurityDutyModal(null);
+    setRecordStaffType('FM_HK');
+    setHkDutyModal(mode);
+    setHkCheckoutSessionId(null);
+    setDeploymentForm({ designation: '', name: '', location: '' });
+    setStaffAttendancePhoto(null);
+    setDeploymentPickerOpen(null);
+  }, []);
+
+  const saveHkDutyForm = async () => {
+    const draft = buildDraftSecurityEntry();
+    if (!draft) {
+      if (!deploymentForm.designation.trim() || !deploymentForm.name.trim() || !deploymentForm.location.trim()) {
+        Alert.alert('Missing details', 'Please select designation, staff name, and location.');
+      } else {
+        Alert.alert('Photo required', 'Take a verification photo with the camera.');
+      }
+      return;
+    }
+
+    const accessToken = (await ensureValidAccessToken()) || token;
+    if (!accessToken) {
+      Alert.alert('Not signed in', 'Please sign in again.');
+      return;
+    }
+
+    setIsSavingHkDuty(true);
+    try {
+      const photoPayload = {
+        photo: draft.photo,
+        latitude: draft.photo.latitude ?? null,
+        longitude: draft.photo.longitude ?? null,
+        accuracy: draft.photo.accuracy ?? null,
+        capturedAt: draft.photo.capturedAt ?? null,
+      };
+
+      if (hkDutyModal === 'check-in') {
+        const session = await postHkDutyCheckIn(accessToken, {
+          staffName: draft.staffName,
+          locationName: draft.location,
+          designation: draft.designation,
+          ...photoPayload,
+        });
+        setCommittedHkEntries((prev) => [
+          ...prev,
+          { designation: draft.designation, staffName: draft.staffName },
+        ]);
+        const shiftLine = session.entryShiftDisplay || '';
+        Alert.alert(
+          'Checked in',
+          `${draft.staffName} at ${draft.location}.${shiftLine ? `\n${shiftLine}` : ''}\nTimer started — hours show after check-out.`,
+        );
+        setHkDutySessionsTick((t) => t + 1);
+      } else {
+        let sessionId = hkCheckoutSessionId;
+        if (!sessionId) {
+          const open = await fetchOpenHkDutySession(accessToken, draft.staffName);
+          sessionId = open?.id ?? null;
+        }
+        if (!sessionId) {
+          Alert.alert(
+            'Not on duty',
+            `${draft.staffName} has no active check-in. Only staff who checked in can check out.`,
+          );
+          return;
+        }
+        const session = await postHkDutyCheckOut(accessToken, sessionId, photoPayload);
+        const present = session.durationLabel
+          || formatDutyDurationMinutes(session.durationMinutes);
+        Alert.alert('Checked out', `${draft.staffName} was on site for ${present}.`);
+        setHkDutySessionsTick((t) => t + 1);
+      }
+
+      closeHkDutyModal();
+      refreshHkData();
+    } catch (err) {
+      console.error('Save HK duty failed:', err);
+      Alert.alert('Error', err?.message || 'Could not save housekeeping duty record.');
+    } finally {
+      setIsSavingHkDuty(false);
+    }
+  };
 
   const renderExpensesDetails = () => {
     const { rows: filtered, periodLabel } = expenseFiltered;
@@ -2616,6 +2845,28 @@ export default function AdminDashboardScreen({ navigation, route }) {
           },
         ]}
       >
+        {permissions?.canSeeModule('Workforce') && !permissions?.canSeeModule('Security') ? (
+          <View style={[styles.fmDutyBanner, { width: screenWidth - CONTENT_PAD * 2 }]}>
+            <Text style={styles.fmDutyBannerTitle}>Housekeeping check-in</Text>
+            <View style={styles.hubActionRow}>
+              <TouchableOpacity
+                style={[styles.hubBtn, styles.hubBtnDuty]}
+                onPress={() => navigation.navigate('HkDuty', { mode: 'check-in' })}
+              >
+                <Ionicons name="log-in-outline" size={16} color="#93C5FD" />
+                <Text style={styles.hubBtnTextDuty}>Check in</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.hubBtn, styles.hubBtnDutyOut]}
+                onPress={() => navigation.navigate('HkDuty', { mode: 'check-out' })}
+              >
+                <Ionicons name="log-out-outline" size={16} color="#FCA5A5" />
+                <Text style={styles.hubBtnTextDutyOut}>Check out</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
+
         <View style={[styles.cardsStack, { width: screenWidth - CONTENT_PAD * 2 }]}>
           {visibleDashboardSections.map((section, index) => {
             const expanded = expandedId === section.id;
@@ -2641,7 +2892,17 @@ export default function AdminDashboardScreen({ navigation, route }) {
                           : section.id === 'Expenses'
                             ? renderExpensesDetails()
                             : renderExpandedBody(section)
-                  : null}
+                  : section.id === 'Workforce'
+                    ? renderCollapsedDutyQuickActions(
+                        () => openHkDutyModal('check-in'),
+                        () => openHkDutyModal('check-out'),
+                      )
+                    : section.id === 'Security'
+                      ? renderCollapsedDutyQuickActions(
+                          () => openSecurityDutyModal('check-in'),
+                          () => openSecurityDutyModal('check-out'),
+                        )
+                      : null}
               </FloatingModuleCard>
             );
           })}
@@ -2699,22 +2960,6 @@ export default function AdminDashboardScreen({ navigation, route }) {
         setForm={setCertificateForm}
         onPickCertificate={pickComplianceCertificate}
         onSave={saveAmcCertificate}
-      />
-
-      <HousekeepingDeploymentForm
-        visible={recordAddHkOpen}
-        onClose={closeAddHkModal}
-        form={hkDeploymentForm}
-        photo={hkDeploymentPhoto}
-        pendingEntries={pendingHkEntries}
-        pendingCount={pendingHkCount}
-        draftQueuedCount={buildDraftHkEntry() ? 1 : 0}
-        onOpenPicker={setHkPickerOpen}
-        onPickCamera={pickHkPhotoFromCamera}
-        onAddToQueue={addHkToQueue}
-        onRemoveQueued={removePendingHkEntry}
-        onSaveAll={saveAllHkEntries}
-        saving={isSavingHousekeeping}
       />
 
       <WaterRecordForm
@@ -3059,13 +3304,169 @@ export default function AdminDashboardScreen({ navigation, route }) {
               ) : null}
       </SecurityFormModal>
 
+      <SecurityFormModal
+        visible={hkDutyModal != null}
+        onClose={closeHkDutyModal}
+        title={hkDutyModal === 'check-out' ? 'Check out' : 'Check in'}
+        maxHeight="88%"
+        footer={
+          <SecSaveButton
+            label={hkDutyModal === 'check-out' ? 'Save check out' : 'Save check in'}
+            onPress={() => {
+              void saveHkDutyForm();
+            }}
+            loading={isSavingHkDuty}
+            disabled={
+              isSavingHkDuty
+              || !buildDraftSecurityEntry()
+              || (hkDutyModal === 'check-out' && !hkCheckoutSessionId)
+            }
+          />
+        }
+      >
+              <Text style={styles.secModalHint}>
+                {hkDutyModal === 'check-out'
+                  ? 'Select staff who is on duty. Designation and location are taken from check-in and cannot be changed.'
+                  : 'Select designation, staff, and location — then capture a verification photo with the camera.'}
+              </Text>
+              {hkDutyModal === 'check-out' ? (
+                <>
+                  <TouchableOpacity
+                    style={styles.secSelect}
+                    activeOpacity={0.85}
+                    onPress={() => {
+                      if (hkCheckoutNameOptions.length === 0) {
+                        Alert.alert(
+                          'No one on duty',
+                          'No active check-ins. Use Check in first.',
+                        );
+                        return;
+                      }
+                      setDeploymentPickerOpen('name');
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.secSelectText,
+                        !deploymentForm.name && styles.secSelectPlaceholder,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {deploymentForm.name || 'Select staff on duty'}
+                    </Text>
+                    <Ionicons name="chevron-down" size={18} color={SEC.textMuted} />
+                  </TouchableOpacity>
+                  <View style={[styles.secSelect, styles.secSelectDisabled]}>
+                    <Text
+                      style={[
+                        styles.secSelectText,
+                        !deploymentForm.designation && styles.secSelectPlaceholder,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {deploymentForm.designation || 'Designation (from check-in)'}
+                    </Text>
+                    <Ionicons name="lock-closed-outline" size={16} color={SEC.textDim} />
+                  </View>
+                  <View style={[styles.secSelect, styles.secSelectDisabled]}>
+                    <Text
+                      style={[
+                        styles.secSelectText,
+                        !deploymentForm.location && styles.secSelectPlaceholder,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {deploymentForm.location || 'Location (from check-in)'}
+                    </Text>
+                    <Ionicons name="lock-closed-outline" size={16} color={SEC.textDim} />
+                  </View>
+                </>
+              ) : (
+                <>
+                  <TouchableOpacity
+                    style={styles.secSelect}
+                    activeOpacity={0.85}
+                    onPress={() => setDeploymentPickerOpen('designation')}
+                  >
+                    <Text
+                      style={[
+                        styles.secSelectText,
+                        !deploymentForm.designation && styles.secSelectPlaceholder,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {deploymentForm.designation || 'Select designation'}
+                    </Text>
+                    <Ionicons name="chevron-down" size={18} color={SEC.textMuted} />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.secSelect}
+                    activeOpacity={0.85}
+                    onPress={() => setDeploymentPickerOpen('name')}
+                  >
+                    <Text
+                      style={[
+                        styles.secSelectText,
+                        !deploymentForm.name && styles.secSelectPlaceholder,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {deploymentForm.name || 'Select staff name'}
+                    </Text>
+                    <Ionicons name="chevron-down" size={18} color={SEC.textMuted} />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.secSelect}
+                    activeOpacity={0.85}
+                    onPress={() => setDeploymentPickerOpen('location')}
+                  >
+                    <Text
+                      style={[
+                        styles.secSelectText,
+                        !deploymentForm.location && styles.secSelectPlaceholder,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {deploymentForm.location || 'Select location'}
+                    </Text>
+                    <Ionicons name="chevron-down" size={18} color={SEC.textMuted} />
+                  </TouchableOpacity>
+                </>
+              )}
+
+              <TouchableOpacity
+                style={styles.secUploadBtn}
+                activeOpacity={0.85}
+                onPress={pickStaffPhotoFromCamera}
+              >
+                <Ionicons name="camera-outline" size={18} color={SEC.teal} />
+                <Text style={styles.secUploadBtnText}>Camera</Text>
+              </TouchableOpacity>
+              {staffAttendancePhoto?.uri ? (
+                <View style={styles.secPhotoPreviewWrap}>
+                  <Image source={{ uri: staffAttendancePhoto.uri }} style={styles.attendancePhotoPreview} />
+                  <Text style={styles.secPhotoCaption} numberOfLines={2}>
+                    {formatGeoCaption(staffAttendancePhoto)}
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.secPhotoRemove}
+                    onPress={() => setStaffAttendancePhoto(null)}
+                    hitSlop={8}
+                  >
+                    <Ionicons name="trash-outline" size={18} color={SEC.red} />
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+      </SecurityFormModal>
+
       <Modal
         visible={activePickerField != null}
         transparent
         animationType="fade"
         onRequestClose={() => {
           setDeploymentPickerOpen(null);
-          setHkPickerOpen(null);
           setPatrolPickerOpen(false);
         }}
       >
@@ -3074,7 +3475,6 @@ export default function AdminDashboardScreen({ navigation, route }) {
             style={styles.secModalBackdrop}
             onPress={() => {
               setDeploymentPickerOpen(null);
-              setHkPickerOpen(null);
               setPatrolPickerOpen(false);
             }}
           />
@@ -3110,14 +3510,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
                   style={styles.secPickerRow}
                   activeOpacity={0.7}
                   onPress={() => {
-                    if (recordAddHkOpen) {
-                      if (hkPickerOpen === 'designation') {
-                        setHkDeploymentForm((p) => ({ ...p, designation: opt }));
-                      } else if (hkPickerOpen === 'name') {
-                        setHkDeploymentForm((p) => ({ ...p, name: opt }));
-                      }
-                      setHkPickerOpen(null);
-                    } else if (recordPatrolOpen && patrolPickerOpen) {
+                    if (recordPatrolOpen && patrolPickerOpen) {
                       setPatrolForm((p) => ({ ...p, staffId: opt }));
                       setPatrolPickerOpen(false);
                     } else {
@@ -3128,6 +3521,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
                       } else if (deploymentPickerOpen === 'name') {
                         if (securityDutyModal === 'check-out') {
                           void applyCheckoutStaffSelection(opt);
+                        } else if (hkDutyModal === 'check-out') {
+                          void applyHkCheckoutStaffSelection(opt);
                         } else {
                           setDeploymentForm((p) => ({ ...p, name: opt }));
                         }
@@ -6269,6 +6664,44 @@ const styles = StyleSheet.create({
     ...SEC_FONTS.label,
     color: SEC.textDim,
     marginBottom: 8,
+  },
+  collapsedDutyWrap: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingBottom: 12,
+    paddingTop: 4,
+  },
+  collapsedDutyBtn: {
+    flex: 1,
+    minWidth: 0,
+  },
+  fmDutyBanner: {
+    marginBottom: 12,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: SEC.surfaceRaised,
+    borderWidth: 1,
+    borderColor: SEC.border,
+  },
+  fmDutyBannerTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: SEC.textMuted,
+    marginBottom: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  hkFullScreenDutyLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 4,
+  },
+  hkFullScreenDutyLinkText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: SEC.gold,
   },
   hubActionRow: {
     flexDirection: 'row',

@@ -23,6 +23,7 @@ public interface IApplicationDbContext : IUnitOfWork
     DbSet<SecurityDeploymentLog> SecurityDeploymentLogs { get; }
     DbSet<SecurityDeploymentPhoto> SecurityDeploymentPhotos { get; }
     DbSet<SecurityDutySession> SecurityDutySessions { get; }
+    DbSet<HousekeepingDutySession> HousekeepingDutySessions { get; }
 
     DbSet<SecurityVendorContract> SecurityVendorContracts { get; }
     DbSet<SecurityRoleRate> SecurityRoleRates { get; }

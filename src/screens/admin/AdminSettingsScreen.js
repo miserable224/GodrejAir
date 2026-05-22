@@ -28,15 +28,6 @@ const SETTINGS_ACTIONS = [
     homeAction: 'recordPatrol',
   },
   {
-    id: 'addHousekeeping',
-    title: 'Add Housekeeping',
-    subtitle: 'Log housekeeping deployment with photo',
-    icon: 'sparkles-outline',
-    color: '#2dd4bf',
-    moduleId: 'Workforce',
-    homeAction: 'addHousekeeping',
-  },
-  {
     id: 'addPromotions',
     title: 'Book Promotion',
     subtitle: 'Dates, vendor, board member & GST 18%',

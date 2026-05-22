@@ -137,6 +137,7 @@ app.MapGet("/health", () => Results.Ok(new
     service = "godrej-api",
     modules = new[] { "security", "housekeeping", "auth", "duty" },
     dutyPing = "/api/security/duty/ping",
+    hkDutyPing = "/api/housekeeping/duty/ping",
 }));
 
 app.MapGet("/health/db", async (ApplicationDbContext db, IConfiguration config, CancellationToken ct) =>

@@ -1,6 +1,7 @@
 import { getSecurityApiOrigin } from '../../shared/config/apiConfig';
 import { fetchWithNetworkHint } from '../../shared/utils/networkError';
 import { ensureValidAccessToken } from '../../shared/services/authService';
+import { uploadSecurityPhoto } from '../../security/services/securityService';
 
 const hkCache = new Map();
 const CACHE_TTL_MS = 2 * 60 * 1000;
@@ -190,4 +191,173 @@ export async function postBulkHousekeepingDeployments(token, dateIso, items, sig
   invalidateHousekeepingCache();
   const body = await res.json();
   return body?.data ?? body;
+}
+
+// ─── Duty check-in / check-out ─────────────────────────────────────────────
+
+const HK_DUTY_DEPLOY_MSG =
+  'Housekeeping check-in/out is not on this server (404). Redeploy the API and run migration 021_housekeeping_duty_sessions.sql.';
+
+async function parseJsonResponse(res) {
+  if (res.status === 204) return { data: null, empty: true };
+  const text = await res.text();
+  if (!text?.trim()) return { data: null, empty: true };
+  return { ...JSON.parse(text), empty: false };
+}
+
+function normalizeHkDutySession(row) {
+  if (!row) return null;
+  return {
+    id: row.id ?? row.Id,
+    staffId: row.staffId ?? row.StaffId ?? null,
+    staffName: row.staffName ?? row.StaffName ?? '',
+    locationId: row.locationId ?? row.LocationId ?? null,
+    locationName: row.locationName ?? row.LocationName ?? '',
+    designation: row.designation ?? row.Designation ?? null,
+    status: row.status ?? row.Status ?? 'open',
+    entryAt: row.entryAt ?? row.EntryAt,
+    exitAt: row.exitAt ?? row.ExitAt ?? null,
+    entryPhotoUrl: row.entryPhotoUrl ?? row.EntryPhotoUrl ?? null,
+    exitPhotoUrl: row.exitPhotoUrl ?? row.ExitPhotoUrl ?? null,
+    entryLatitude: row.entryLatitude ?? row.EntryLatitude ?? null,
+    entryLongitude: row.entryLongitude ?? row.EntryLongitude ?? null,
+    exitLatitude: row.exitLatitude ?? row.ExitLatitude ?? null,
+    exitLongitude: row.exitLongitude ?? row.ExitLongitude ?? null,
+    entryShift: row.entryShift ?? row.EntryShift ?? null,
+    exitShift: row.exitShift ?? row.ExitShift ?? null,
+    entryShiftDisplay: row.entryShiftDisplay ?? row.EntryShiftDisplay ?? null,
+    exitShiftDisplay: row.exitShiftDisplay ?? row.ExitShiftDisplay ?? null,
+    durationMinutes: row.durationMinutes ?? row.DurationMinutes ?? null,
+    durationHours: row.durationHours ?? row.DurationHours ?? null,
+    durationLabel: row.durationLabel ?? row.DurationLabel ?? null,
+  };
+}
+
+async function hkDutyFetch(path, token, signal) {
+  const accessToken = token || (await ensureValidAccessToken());
+  if (!accessToken) throw new Error('Not signed in');
+  const res = await fetchWithNetworkHint(`${apiBase()}${path}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal,
+  }, apiNetworkHint());
+  if (!res.ok) {
+    throw new Error(`Housekeeping duty failed (${res.status}): ${await readApiError(res)}`);
+  }
+  const json = await parseJsonResponse(res);
+  return json;
+}
+
+export async function assertHkDutyApiAvailable(token, signal) {
+  const accessToken = token || (await ensureValidAccessToken());
+  if (!accessToken) throw new Error('Not signed in');
+  const res = await fetchWithNetworkHint(`${apiBase()}/housekeeping/duty/ping`, {
+    method: 'GET',
+    signal,
+  }, apiNetworkHint());
+  if (res.status === 404) throw new Error(HK_DUTY_DEPLOY_MSG);
+  if (!res.ok) throw new Error(`Housekeeping duty probe failed (${res.status})`);
+}
+
+export async function fetchHkDutySessionsRange(token, { from, to }, signal) {
+  const params = new URLSearchParams();
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  const qs = params.toString();
+  const json = await hkDutyFetch(`/housekeeping/duty/sessions${qs ? `?${qs}` : ''}`, token, signal);
+  const list = Array.isArray(json.data) ? json.data : [];
+  return list.map(normalizeHkDutySession);
+}
+
+export async function fetchOpenHkDutySession(token, staffName, signal) {
+  const q = encodeURIComponent((staffName || '').trim());
+  const json = await hkDutyFetch(`/housekeeping/duty/open?staffName=${q}`, token, signal);
+  return normalizeHkDutySession(json.data);
+}
+
+export async function fetchOnDutyHkSessions(token, signal) {
+  const json = await hkDutyFetch('/housekeeping/duty/on-duty', token, signal);
+  const list = Array.isArray(json.data) ? json.data : [];
+  return list.map(normalizeHkDutySession);
+}
+
+export async function postHkDutyCheckIn(token, payload, signal) {
+  const accessToken = token || (await ensureValidAccessToken());
+  if (!accessToken) throw new Error('Not signed in');
+  await assertHkDutyApiAvailable(accessToken, signal);
+
+  const { photo, staffName, locationName, designation, latitude, longitude, accuracy, capturedAt, entryAt } = payload;
+  if (!photo?.uri && !photo?.file) throw new Error('Check-in photo is required.');
+
+  const photoUrl = await uploadSecurityPhoto(accessToken, photo, signal);
+  if (!photoUrl) throw new Error('Photo upload succeeded but no URL was returned.');
+
+  const body = {
+    staffName: (staffName || '').trim(),
+    locationName: (locationName || '').trim(),
+    designation: designation?.trim() || null,
+    entryAt: capturedAt || entryAt || new Date().toISOString(),
+    latitude: latitude ?? null,
+    longitude: longitude ?? null,
+    accuracyMeters: accuracy ?? null,
+    capturedAt: capturedAt || entryAt || new Date().toISOString(),
+    photoUrls: [photoUrl],
+  };
+
+  const res = await fetchWithNetworkHint(`${apiBase()}/housekeeping/duty/check-in`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  }, apiNetworkHint());
+
+  if (!res.ok) {
+    if (res.status === 404) throw new Error(HK_DUTY_DEPLOY_MSG);
+    throw new Error(`Check-in failed (${res.status}): ${await readApiError(res)}`);
+  }
+
+  invalidateHousekeepingCache();
+  const json = await parseJsonResponse(res);
+  return normalizeHkDutySession(json.data);
+}
+
+export async function postHkDutyCheckOut(token, sessionId, payload, signal) {
+  const accessToken = token || (await ensureValidAccessToken());
+  if (!accessToken) throw new Error('Not signed in');
+  await assertHkDutyApiAvailable(accessToken, signal);
+
+  const { photo, latitude, longitude, accuracy, capturedAt, exitAt } = payload || {};
+  const photoUrls = [];
+  if (photo?.uri || photo?.file) {
+    const photoUrl = await uploadSecurityPhoto(accessToken, photo, signal);
+    if (photoUrl) photoUrls.push(photoUrl);
+  }
+
+  const body = {
+    exitAt: capturedAt || exitAt || new Date().toISOString(),
+    latitude: latitude ?? null,
+    longitude: longitude ?? null,
+    accuracyMeters: accuracy ?? null,
+    capturedAt: capturedAt || exitAt || new Date().toISOString(),
+    photoUrls,
+  };
+
+  const res = await fetchWithNetworkHint(
+    `${apiBase()}/housekeeping/duty/${sessionId}/check-out`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    },
+    apiNetworkHint(),
+  );
+
+  if (!res.ok) {
+    if (res.status === 404) throw new Error(HK_DUTY_DEPLOY_MSG);
+    throw new Error(`Check-out failed (${res.status}): ${await readApiError(res)}`);
+  }
+
+  invalidateHousekeepingCache();
+  const json = await parseJsonResponse(res);
+  return normalizeHkDutySession(json.data);
 }

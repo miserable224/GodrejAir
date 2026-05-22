@@ -35,7 +35,7 @@ Host=db.xxx.supabase.co;Port=5432;Database=postgres;Username=postgres;Password=Y
 
 Do **not** paste only the password, project ref, or JSON — the full connection string is required.
 
-In Supabase → SQL Editor, run migrations `009_security_app_users.sql` through `020_security_duty_shift.sql` (includes `019_security_duty_sessions` for check-in/out).
+In Supabase → SQL Editor, run migrations `009_security_app_users.sql` through `021_housekeeping_duty_sessions.sql` (includes duty check-in/out for security and housekeeping).
 
 ## Verify after deploy
 
@@ -53,11 +53,12 @@ curl -X POST https://YOUR-SERVICE.onrender.com/api/auth/login \
 
 Expected: HTTP 200 with `accessToken`.
 
-Duty check-in/out (requires latest API deploy + migrations 019–020):
+Duty check-in/out (requires latest API deploy + migrations 019–021):
 
 ```bash
 # Should return 401 without token, not 404
 curl -s -o /dev/null -w "%{http_code}" -X POST https://YOUR-SERVICE.onrender.com/api/security/duty/check-in
+curl -s -o /dev/null -w "hk:%{http_code}" https://YOUR-SERVICE.onrender.com/api/housekeeping/duty/ping
 ```
 
-Expected: `401` (unauthorized). If you get **404**, redeploy Render from the current `dev` branch.
+Expected: `401` on check-in POST, `200` on HK ping. If you get **404**, redeploy Render from the current `dev` branch.

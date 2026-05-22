@@ -16,6 +16,7 @@ import {
   AmenitiesScreen, ServicesScreen, EventsScreen, HelpdeskScreen, WorkforceScreen,
 } from '../screens/PlaceholderScreens';
 import GuardDutyScreen from '../screens/security/GuardDutyScreen';
+import HkDutyScreen from '../screens/housekeeping/HkDutyScreen';
 
 const Stack = createStackNavigator();
 const BottomTab = createBottomTabNavigator();
@@ -127,6 +128,7 @@ function AdminStack() {
       <Stack.Screen name="AdminMyGateTickets" component={AdminMyGateTicketsScreen} />
       <Stack.Screen name="AdminWorkforce" component={WorkforceScreen} />
       <Stack.Screen name="GuardDuty" component={GuardDutyScreen} />
+      <Stack.Screen name="HkDuty" component={HkDutyScreen} />
     </Stack.Navigator>
   );
 }
