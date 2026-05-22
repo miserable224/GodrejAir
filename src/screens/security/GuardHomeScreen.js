@@ -31,14 +31,14 @@ export default function GuardHomeScreen({ navigation }) {
         <TouchableOpacity
           style={[styles.card, SHADOWS.medium]}
           activeOpacity={0.85}
-          onPress={() => navigation.navigate('GuardWorkforce')}
+          onPress={() => navigation.navigate('GuardDuty')}
         >
           <View style={[styles.iconWrap, { backgroundColor: '#1E3A5F' }]}>
             <Ionicons name="shield-checkmark" size={28} color="#FFF" />
           </View>
           <View style={styles.cardText}>
-            <Text style={styles.cardTitle}>Deployment & attendance</Text>
-            <Text style={styles.cardSub}>Log guard deployment with photo and GPS</Text>
+            <Text style={styles.cardTitle}>Check in / Check out</Text>
+            <Text style={styles.cardSub}>Report on duty at your post with photo and GPS</Text>
           </View>
           <Ionicons name="chevron-forward" size={22} color={COLORS.textLight} />
         </TouchableOpacity>

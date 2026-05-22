@@ -9,6 +9,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  TouchableOpacity,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SEC, SEC_FONTS } from '../constants/moduleThemes';
@@ -46,7 +47,6 @@ export default function LedgerFormModal({
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={styles.sheetHost}
-          onStartShouldSetResponder={() => true}
         >
           <View style={[styles.sheet, { maxHeight }]}>
             <View style={styles.handle} />
@@ -76,17 +76,16 @@ export default function LedgerFormModal({
 export function ModuleSaveButton({ label, onPress, loading, disabled, theme = SEC }) {
   const styles = useMemo(() => createStyles(theme), [theme]);
 
+  const inactive = Boolean(loading || disabled);
+
   return (
-    <Pressable
-      style={({ pressed }) => [
-        styles.saveBtn,
-        (loading || disabled) && styles.saveBtnDisabled,
-        pressed && !loading && !disabled && styles.saveBtnPressed,
-      ]}
+    <TouchableOpacity
+      style={[styles.saveBtn, inactive && styles.saveBtnDisabled]}
       onPress={() => {
-        if (!loading && !disabled) onPress?.();
+        if (!inactive) onPress?.();
       }}
-      disabled={loading || disabled}
+      activeOpacity={0.88}
+      disabled={inactive}
       accessibilityRole="button"
       accessibilityLabel={label}
     >
@@ -95,7 +94,7 @@ export function ModuleSaveButton({ label, onPress, loading, disabled, theme = SE
       ) : (
         <Text style={styles.saveBtnText}>{label}</Text>
       )}
-    </Pressable>
+    </TouchableOpacity>
   );
 }
 
@@ -130,6 +129,7 @@ function createStyles(theme) {
       paddingBottom: Platform.OS === 'ios' ? 24 : 18,
       paddingTop: 8,
       width: '100%',
+      flexDirection: 'column',
       ...Platform.select({
         web: { boxShadow: '0 -12px 48px rgba(0,0,0,0.55)' },
         default: {},
@@ -158,12 +158,14 @@ function createStyles(theme) {
       padding: 4,
     },
     scroll: {
-      flexGrow: 0,
+      flexGrow: 1,
+      flexShrink: 1,
     },
     scrollContent: {
       paddingBottom: 8,
     },
     footer: {
+      flexShrink: 0,
       paddingTop: 8,
       zIndex: 20,
       ...Platform.select({

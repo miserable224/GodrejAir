@@ -1,7 +1,12 @@
+using SecurityOps.Domain;
+
 namespace SecurityOps.Domain.Entities;
 
 public class SecurityDeploymentLog : AuditableEntity
 {
+    /// <summary>security | housekeeping — which API owns this row.</summary>
+    public string Module { get; set; } = DeploymentModules.Security;
+
     public DateTime LogDate { get; set; }
     public string? Designation { get; set; }
     public string StaffName { get; set; } = string.Empty;

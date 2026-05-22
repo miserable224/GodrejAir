@@ -91,8 +91,13 @@ export default function ModulePhotoSection({
       </View>
       {photo?.uri ? (
         <View style={styles.previewWrap}>
-          <Image source={{ uri: photo.uri }} style={styles.thumb} />
-          <Text style={styles.caption} numberOfLines={3}>
+          <Image
+            source={{ uri: photo.uri }}
+            style={styles.thumb}
+            resizeMode="cover"
+            accessibilityLabel="Selected photo preview"
+          />
+          <Text style={styles.caption} numberOfLines={4}>
             {formatGeoCaption(photo)}
           </Text>
           {onRemovePhoto ? (

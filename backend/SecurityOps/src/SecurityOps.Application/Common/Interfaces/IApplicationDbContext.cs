@@ -22,6 +22,7 @@ public interface IApplicationDbContext : IUnitOfWork
     DbSet<PatrolPhoto> PatrolPhotos { get; }
     DbSet<SecurityDeploymentLog> SecurityDeploymentLogs { get; }
     DbSet<SecurityDeploymentPhoto> SecurityDeploymentPhotos { get; }
+    DbSet<SecurityDutySession> SecurityDutySessions { get; }
 
     DbSet<SecurityVendorContract> SecurityVendorContracts { get; }
     DbSet<SecurityRoleRate> SecurityRoleRates { get; }
@@ -32,6 +33,15 @@ public interface IApplicationDbContext : IUnitOfWork
     DbSet<SecurityAppUser> SecurityAppUsers { get; }
     DbSet<SecurityRefreshToken> SecurityRefreshTokens { get; }
     DbSet<SecurityEmailOtp> SecurityEmailOtps { get; }
+
+    DbSet<HkVendorContract> HkVendorContracts { get; }
+    DbSet<HkContractRate> HkContractRates { get; }
+    DbSet<Promotion> Promotions { get; }
+    DbSet<PromotionType> PromotionTypes { get; }
+    DbSet<PromotionVendor> PromotionVendors { get; }
+    DbSet<BoardMember> BoardMembers { get; }
+    DbSet<PromotionPayment> PromotionPayments { get; }
+    DbSet<PromotionDocument> PromotionDocuments { get; }
 
     DatabaseFacade Database { get; }
 }

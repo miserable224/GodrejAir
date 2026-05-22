@@ -10,7 +10,7 @@ import {
   setOnSessionExpired,
   setOnSessionUpdated,
   normalizeApiRole,
-} from '../services/authService';
+} from '../modules/shared';
 import {
   API_ROLES,
   isBoardRole,

@@ -1,6 +1,6 @@
 /**
  * LedgerX module palettes — dark shell shared across ops modules.
- * Security (green), Housekeeping (amber), Water (sky).
+ * Security (green), Housekeeping (same as Security), Water (sky).
  */
 import { SEC as SECURITY, SEC_FONTS } from './securityTheme';
 
@@ -25,18 +25,8 @@ export const SEC = {
   saveOnAccent: SECURITY.bg,
 };
 
-export const HK = {
-  ...shell,
-  accent: '#f59e0b',
-  accentDim: 'rgba(245, 158, 11, 0.14)',
-  accentBorder: 'rgba(245, 158, 11, 0.4)',
-  gold: '#f59e0b',
-  goldDim: 'rgba(245, 158, 11, 0.12)',
-  red: '#f87171',
-  saveAccent: '#f59e0b',
-  saveOnAccent: '#0b0e14',
-  headerGradient: ['#1a1508', '#0b0e14'],
-};
+/** Housekeeping uses the same LedgerX palette as Security ops. */
+export const HK = { ...SEC };
 
 export const WATER = {
   ...shell,
@@ -50,6 +40,16 @@ export const WATER = {
   headerGradient: ['#0c1929', '#0b0e14'],
 };
 
+export const PROMO = {
+  ...shell,
+  accent: '#D97706',
+  accentDim: 'rgba(217, 119, 6, 0.14)',
+  accentBorder: 'rgba(217, 119, 6, 0.4)',
+  saveAccent: '#D97706',
+  saveOnAccent: '#0b0e14',
+  headerGradient: ['#292017', '#0b0e14'],
+};
+
 export { SEC_FONTS };
 
-export const MODULE_THEMES = { security: SEC, hk: HK, water: WATER };
+export const MODULE_THEMES = { security: SEC, hk: HK, water: WATER, promo: PROMO };

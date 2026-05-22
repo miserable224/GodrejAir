@@ -1,0 +1,22 @@
+# Single API on Render — Security + Housekeeping + Auth on one service.
+services:
+  - type: web
+    name: godrej-api
+    runtime: docker
+    dockerfilePath: backend/SecurityOps/Dockerfile
+    dockerContext: .
+    branch: dev
+    plan: free
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      - key: DOTNET_USE_POLLING_FILE_WATCHER
+        value: "true"
+      - key: Supabase__ConnectionString
+        sync: false
+      - key: Jwt__Issuer
+        value: SecurityOps
+      - key: Jwt__Audience
+        value: SecurityOpsClients
+      - key: Jwt__SigningKey
+        sync: false

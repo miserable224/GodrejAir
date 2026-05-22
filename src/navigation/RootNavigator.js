@@ -10,10 +10,12 @@ import { useAuth } from '../context/AuthContext';
 import LoginScreen from '../screens/auth/LoginScreen';
 import ResidentHomeScreen from '../screens/resident/HomeScreen';
 import AdminDashboardScreen from '../screens/admin/AdminDashboardScreen';
+import AdminSettingsScreen from '../screens/admin/AdminSettingsScreen';
 import {
-  AdminTenantScreen, AdminSettingsScreen, AdminPromotionsScreen, AdminMyGateTicketsScreen,
+  AdminTenantScreen, AdminPromotionsScreen, AdminMyGateTicketsScreen,
   AmenitiesScreen, ServicesScreen, EventsScreen, HelpdeskScreen, WorkforceScreen,
 } from '../screens/PlaceholderScreens';
+import GuardDutyScreen from '../screens/security/GuardDutyScreen';
 
 const Stack = createStackNavigator();
 const BottomTab = createBottomTabNavigator();
@@ -124,6 +126,7 @@ function AdminStack() {
       <Stack.Screen name="AdminPromotions" component={AdminPromotionsScreen} />
       <Stack.Screen name="AdminMyGateTickets" component={AdminMyGateTicketsScreen} />
       <Stack.Screen name="AdminWorkforce" component={WorkforceScreen} />
+      <Stack.Screen name="GuardDuty" component={GuardDutyScreen} />
     </Stack.Navigator>
   );
 }

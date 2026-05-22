@@ -23,7 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS, SIZES, SHADOWS, DARK } from '../constants/theme';
 import AmbientBackground from '../components/AmbientBackground';
 import { useAuth } from '../context/AuthContext';
-import { apiService } from '../services/apiService';
+import { apiService } from '../modules/shared';
 
 const { width } = Dimensions.get('window');
 
@@ -989,35 +989,11 @@ export function AdminTenantScreen() {
   );
 }
 
-/** Admin tab: settings (uses tab bar height for bottom padding). */
-export function AdminSettingsScreen() {
-  const tabBarH = useSafeBottomTabBarHeight();
-  return (
-    <PlaceholderScreen
-      singleLineHeader
-      contentBottomInset={tabBarH}
-      title="Settings"
-      subtitle="Society preferences & integrations"
-      icon="settings"
-      color="#6B7280"
-    />
-  );
-}
+/** @deprecated Import from `./admin/AdminSettingsScreen` */
+export { default as AdminSettingsScreen } from './admin/AdminSettingsScreen';
 
-/** Pushed from admin dashboard: promotions workspace. */
-export function AdminPromotionsScreen({ navigation }) {
-  return (
-    <PlaceholderScreen
-      showStackBack
-      navigation={navigation}
-      singleLineHeader
-      title="Promotions"
-      subtitle="Campaigns & society offers"
-      icon="megaphone"
-      color="#D97706"
-    />
-  );
-}
+/** @deprecated Import from `./admin/AdminPromotionsScreen` */
+export { default as AdminPromotionsScreen } from './admin/AdminPromotionsScreen';
 
 /** Pushed from admin dashboard: MyGate tickets. */
 export function AdminMyGateTicketsScreen({ navigation }) {

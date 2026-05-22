@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using SecurityOps.Application.Common.Interfaces;
+using SecurityOps.Domain;
 using SecurityOps.Domain.Entities;
 
 namespace SecurityOps.Infrastructure.Persistence;
@@ -24,6 +25,7 @@ public sealed class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<PatrolPhoto> PatrolPhotos => Set<PatrolPhoto>();
     public DbSet<SecurityDeploymentLog> SecurityDeploymentLogs => Set<SecurityDeploymentLog>();
     public DbSet<SecurityDeploymentPhoto> SecurityDeploymentPhotos => Set<SecurityDeploymentPhoto>();
+    public DbSet<SecurityDutySession> SecurityDutySessions => Set<SecurityDutySession>();
 
     public DbSet<SecurityVendorContract> SecurityVendorContracts => Set<SecurityVendorContract>();
     public DbSet<SecurityRoleRate> SecurityRoleRates => Set<SecurityRoleRate>();
@@ -34,6 +36,15 @@ public sealed class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<SecurityAppUser> SecurityAppUsers => Set<SecurityAppUser>();
     public DbSet<SecurityRefreshToken> SecurityRefreshTokens => Set<SecurityRefreshToken>();
     public DbSet<SecurityEmailOtp> SecurityEmailOtps => Set<SecurityEmailOtp>();
+
+    public DbSet<HkVendorContract> HkVendorContracts => Set<HkVendorContract>();
+    public DbSet<HkContractRate> HkContractRates => Set<HkContractRate>();
+    public DbSet<Promotion> Promotions => Set<Promotion>();
+    public DbSet<PromotionType> PromotionTypes => Set<PromotionType>();
+    public DbSet<PromotionVendor> PromotionVendors => Set<PromotionVendor>();
+    public DbSet<BoardMember> BoardMembers => Set<BoardMember>();
+    public DbSet<PromotionPayment> PromotionPayments => Set<PromotionPayment>();
+    public DbSet<PromotionDocument> PromotionDocuments => Set<PromotionDocument>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -142,6 +153,8 @@ public sealed class ApplicationDbContext : DbContext, IApplicationDbContext
         {
             e.ToTable("security_deployment_logs");
             e.HasKey(x => x.Id);
+            e.Property(x => x.Module).HasMaxLength(32).HasDefaultValue(DeploymentModules.Security);
+            e.HasIndex(x => x.Module);
             e.Property(x => x.Designation).HasMaxLength(100);
             e.Property(x => x.StaffName).HasMaxLength(200).IsRequired();
             e.Property(x => x.LocationName).HasMaxLength(200).IsRequired();
@@ -166,6 +179,32 @@ public sealed class ApplicationDbContext : DbContext, IApplicationDbContext
                 .WithMany(x => x.Photos)
                 .HasForeignKey(x => x.DeploymentLogId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<SecurityDutySession>(e =>
+        {
+            e.ToTable("security_duty_sessions");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.StaffName).HasMaxLength(200).IsRequired();
+            e.Property(x => x.LocationName).HasMaxLength(200).IsRequired();
+            e.Property(x => x.Designation).HasMaxLength(100);
+            e.Property(x => x.Status).HasMaxLength(20).IsRequired();
+            e.Property(x => x.EntryPhotoUrl).HasMaxLength(2000);
+            e.Property(x => x.ExitPhotoUrl).HasMaxLength(2000);
+            e.Property(x => x.EntryShift).HasMaxLength(20);
+            e.Property(x => x.ExitShift).HasMaxLength(20);
+            e.HasIndex(x => x.Status);
+            e.HasIndex(x => x.EntryShift);
+            e.HasIndex(x => x.EntryAt);
+            e.HasIndex(x => new { x.StaffId, x.Status });
+            e.HasOne(x => x.Staff)
+                .WithMany()
+                .HasForeignKey(x => x.StaffId)
+                .OnDelete(DeleteBehavior.SetNull);
+            e.HasOne(x => x.Location)
+                .WithMany()
+                .HasForeignKey(x => x.LocationId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<SecurityVendorContract>(e =>
@@ -282,6 +321,96 @@ public sealed class ApplicationDbContext : DbContext, IApplicationDbContext
             e.Property(x => x.TokenHash).HasMaxLength(128).IsRequired();
             e.HasIndex(x => x.TokenHash);
             e.HasOne(x => x.User).WithMany(x => x.RefreshTokens).HasForeignKey(x => x.UserId);
+        });
+
+        modelBuilder.Entity<HkVendorContract>(e =>
+        {
+            e.ToTable("hk_vendor_contracts");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.VendorName).HasMaxLength(200).IsRequired();
+            e.Property(x => x.ContractNumber).HasMaxLength(80).IsRequired();
+            e.Property(x => x.ServiceChargePercentage).HasPrecision(6, 2);
+            e.Property(x => x.GstPercentage).HasPrecision(6, 2);
+            e.HasIndex(x => x.IsActive);
+        });
+
+        modelBuilder.Entity<HkContractRate>(e =>
+        {
+            e.ToTable("hk_contract_rates");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.RoleCode).HasMaxLength(50).IsRequired();
+            e.Property(x => x.RoleName).HasMaxLength(120).IsRequired();
+            e.Property(x => x.MonthlyRate).HasPrecision(12, 2);
+            e.Property(x => x.Shift1Sanctioned).HasColumnName("shift1_sanctioned");
+            e.Property(x => x.Shift2Sanctioned).HasColumnName("shift2_sanctioned");
+            e.Property(x => x.IsActive).HasColumnName("is_active");
+            e.HasIndex(x => new { x.ContractId, x.RoleCode }).IsUnique();
+            e.HasOne(x => x.Contract).WithMany(x => x.RoleRates).HasForeignKey(x => x.ContractId);
+        });
+
+        modelBuilder.Entity<PromotionType>(e =>
+        {
+            e.ToTable("promotion_types");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.TypeName).HasMaxLength(120).IsRequired();
+            e.HasIndex(x => x.TypeName).IsUnique();
+        });
+
+        modelBuilder.Entity<PromotionVendor>(e =>
+        {
+            e.ToTable("vendors");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.VendorName).HasMaxLength(200).IsRequired();
+            e.HasIndex(x => x.VendorName);
+        });
+
+        modelBuilder.Entity<BoardMember>(e =>
+        {
+            e.ToTable("board_members");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Name).HasMaxLength(200).IsRequired();
+        });
+
+        modelBuilder.Entity<Promotion>(e =>
+        {
+            e.ToTable("promotions");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.PromotionTitle).HasMaxLength(200);
+            e.Property(x => x.UnitPrice).HasPrecision(12, 2);
+            e.Property(x => x.SubtotalAmount).HasPrecision(12, 2);
+            e.Property(x => x.GstPercentage).HasPrecision(5, 2);
+            e.Property(x => x.GstAmount).HasPrecision(12, 2);
+            e.Property(x => x.TotalAmount).HasPrecision(12, 2);
+            e.Property(x => x.PaymentStatus).HasMaxLength(20);
+            e.Property(x => x.PromotionStatus).HasMaxLength(20);
+            e.HasOne(x => x.PromotionType).WithMany().HasForeignKey(x => x.PromotionTypeId);
+            e.HasOne(x => x.Vendor).WithMany().HasForeignKey(x => x.VendorId);
+            e.HasOne(x => x.BoardMember).WithMany().HasForeignKey(x => x.BoardMemberId);
+            e.HasIndex(x => x.VendorId);
+            e.HasIndex(x => new { x.StartDate, x.EndDate });
+            e.HasIndex(x => x.PromotionStatus);
+        });
+
+        modelBuilder.Entity<PromotionPayment>(e =>
+        {
+            e.ToTable("promotion_payments");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Amount).HasPrecision(12, 2);
+            e.Property(x => x.PaymentMode).HasMaxLength(50);
+            e.Property(x => x.PaymentReferenceNumber).HasMaxLength(120);
+            e.HasOne(x => x.Promotion).WithMany().HasForeignKey(x => x.PromotionId);
+            e.HasIndex(x => x.PromotionId);
+            e.HasIndex(x => x.PaymentDate);
+        });
+
+        modelBuilder.Entity<PromotionDocument>(e =>
+        {
+            e.ToTable("promotion_documents");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.FileUrl).HasMaxLength(500).IsRequired();
+            e.Property(x => x.FileName).HasMaxLength(255);
+            e.Property(x => x.DocumentType).HasMaxLength(80);
+            e.HasOne(x => x.Promotion).WithMany().HasForeignKey(x => x.PromotionId);
         });
 
         // Many Supabase schemas have created_at / updated_at but not user FK columns. AuditableEntity

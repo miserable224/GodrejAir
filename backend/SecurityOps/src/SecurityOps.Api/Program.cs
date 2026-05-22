@@ -6,9 +6,15 @@ using SecurityOps.Api.Auth;
 using SecurityOps.Api.Middleware;
 using SecurityOps.Application;
 using SecurityOps.Infrastructure;
+using SecurityOps.Infrastructure.Persistence;
 using Serilog;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
+
+var port = Environment.GetEnvironmentVariable("PORT");
+if (!string.IsNullOrWhiteSpace(port))
+    builder.WebHost.UseUrls($"http://+:{port}");
 
 builder.Host.UseSerilog((_, _, cfg) =>
     cfg.MinimumLevel.Information()
@@ -32,7 +38,7 @@ builder.Services.AddCors(options =>
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Security Operations API", Version = "v1" });
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Godrej Air API", Version = "v1" });
     var bearer = new OpenApiSecurityScheme
     {
         Name = "Authorization",
@@ -47,6 +53,21 @@ builder.Services.AddSwaggerGen(c =>
     {
         [bearer] = Array.Empty<string>()
     });
+    c.TagActionsBy(api =>
+    {
+        var path = api.RelativePath ?? string.Empty;
+        if (path.StartsWith("api/security", StringComparison.OrdinalIgnoreCase))
+            return new[] { "Security" };
+        if (path.StartsWith("api/housekeeping", StringComparison.OrdinalIgnoreCase))
+            return new[] { "Housekeeping" };
+        if (path.StartsWith("api/promotions", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith("api/promotion-types", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith("api/vendors", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith("api/upload-receipt", StringComparison.OrdinalIgnoreCase))
+            return new[] { "Promotions" };
+        return new[] { "Shared" };
+    });
+    c.DocInclusionPredicate((_, _) => true);
 });
 
 var jwtSection = builder.Configuration.GetSection("Jwt");
@@ -90,6 +111,7 @@ app.UseRouting();
 app.UseCors("AllowAll");
 
 app.UseSerilogRequestLogging();
+app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseMiddleware<ValidationExceptionMiddleware>();
 
 if (app.Environment.IsDevelopment())
@@ -98,9 +120,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-// HTTPS redirect breaks cross-origin calls from Expo Web (http://localhost:8081 → http://localhost:5115).
-if (!app.Environment.IsDevelopment())
-    app.UseHttpsRedirection();
+// TLS is terminated at Render/Vercel edge; container listens on HTTP only — no UseHttpsRedirection.
 
 app.UseAuthentication();
 app.UseAuthorization();
@@ -110,6 +130,47 @@ if (string.IsNullOrWhiteSpace(webRoot))
     webRoot = Path.Combine(app.Environment.ContentRootPath, "wwwroot");
 Directory.CreateDirectory(webRoot);
 app.UseStaticFiles();
+
+app.MapGet("/health", () => Results.Ok(new
+{
+    status = "healthy",
+    service = "godrej-api",
+    modules = new[] { "security", "housekeeping", "auth", "duty" },
+    dutyPing = "/api/security/duty/ping",
+}));
+
+app.MapGet("/health/db", async (ApplicationDbContext db, IConfiguration config, CancellationToken ct) =>
+{
+    var configured = !string.IsNullOrWhiteSpace(config["Supabase:ConnectionString"])
+        || !string.IsNullOrWhiteSpace(config.GetConnectionString("DefaultConnection"))
+        || !string.IsNullOrWhiteSpace(config["DATABASE_URL"]);
+
+    try
+    {
+        await db.Database.OpenConnectionAsync(ct);
+        await db.Database.CloseConnectionAsync();
+
+        var userCount = await db.SecurityAppUsers.CountAsync(ct);
+        return Results.Ok(new { status = "ok", securityAppUsers = userCount });
+    }
+    catch (Exception ex)
+    {
+        return Results.Json(new
+        {
+            status = "error",
+            configured,
+            message = ex.GetBaseException().Message,
+            hint = "Use Supabase Session pooler (port 6543) on Render if direct port 5432 fails.",
+        }, statusCode: 503);
+    }
+});
+app.MapGet("/", () => Results.Ok(new
+{
+    status = "healthy",
+    service = "godrej-api",
+    health = "/health",
+    swagger = app.Environment.IsDevelopment() ? "/swagger" : null,
+}));
 
 app.MapControllers();
 

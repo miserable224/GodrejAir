@@ -74,6 +74,52 @@ public sealed record PatrolResponse(
     IReadOnlyList<PatrolStaffResponse> Staff,
     IReadOnlyList<PatrolPhotoResponse> Photos);
 
+// --- Duty (check-in / check-out) ---
+public sealed record CheckInDutyRequest(
+    string StaffName,
+    string LocationName,
+    string? Designation,
+    DateTime EntryAt,
+    double? Latitude,
+    double? Longitude,
+    double? AccuracyMeters,
+    DateTime? CapturedAt,
+    IReadOnlyList<string> PhotoUrls);
+
+public sealed record CheckOutDutyRequest(
+    DateTime ExitAt,
+    double? Latitude,
+    double? Longitude,
+    double? AccuracyMeters,
+    DateTime? CapturedAt,
+    IReadOnlyList<string>? PhotoUrls);
+
+public sealed record DutySessionResponse(
+    Guid Id,
+    Guid? StaffId,
+    string StaffName,
+    Guid? LocationId,
+    string LocationName,
+    string? Designation,
+    string Status,
+    DateTime EntryAt,
+    DateTime? ExitAt,
+    string? EntryPhotoUrl,
+    string? ExitPhotoUrl,
+    double? EntryLatitude,
+    double? EntryLongitude,
+    double? ExitLatitude,
+    double? ExitLongitude,
+    int? DurationMinutes,
+    decimal? DurationHours,
+    string? DurationLabel,
+    string? EntryShift,
+    string? ExitShift,
+    string? EntryShiftDisplay,
+    string? ExitShiftDisplay,
+    DateTime? EntryCapturedAt,
+    DateTime? ExitCapturedAt);
+
 // --- Reports ---
 public sealed record DailyManpowerReport(DateOnly Date, int RequiredManpower, int DeployedManpower, int Shortage);
 public sealed record MonthlyShortageReport(string Month, int TotalShifts, int TotalPatrols, decimal CompliancePercent);
