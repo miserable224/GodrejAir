@@ -18,7 +18,7 @@ import { COLORS, SIZES, DARK } from '../../constants/theme';
 import { ADMIN_MANPOWER_DEPLOYMENT } from '../../constants/data';
 import { useAuth } from '../../context/AuthContext';
 import ModulePhotoSection from '../../components/ModulePhotoSection';
-import { pickGeoPhotoFromCamera, pickGeoPhotoFromLibrary } from '../../utils/geoPhoto';
+import { pickGeoPhotoForDuty } from '../../utils/geoPhoto';
 import { fetchStaff } from '../../modules/security/services/securityService';
 import {
   fetchOpenHkDutySession,
@@ -305,14 +305,11 @@ export default function HkDutyScreen({ navigation, route }) {
             theme={PHOTO_THEME}
             photo={photo}
             onCamera={async () => {
-              const p = await pickGeoPhotoFromCamera();
-              if (p) setPhoto(p);
-            }}
-            onGallery={async () => {
-              const p = await pickGeoPhotoFromLibrary();
+              const p = await pickGeoPhotoForDuty();
               if (p) setPhoto(p);
             }}
             onRemovePhoto={() => setPhoto(null)}
+            cameraOnly
           />
 
           <View style={styles.dualActionRow}>

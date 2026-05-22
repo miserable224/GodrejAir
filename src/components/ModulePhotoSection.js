@@ -34,6 +34,10 @@ function createStyles(theme) {
       borderColor: theme.border,
       backgroundColor: theme.bg,
     },
+    uploadBtnSolo: {
+      flex: 1,
+      alignSelf: 'stretch',
+    },
     uploadBtnText: {
       fontSize: 13,
       fontWeight: '700',
@@ -66,13 +70,15 @@ function createStyles(theme) {
   });
 }
 
-/** Single camera + gallery block below form fields (deployment-style). */
+/** Camera (+ optional gallery) block below form fields. */
 export default function ModulePhotoSection({
   theme,
   photo,
   onCamera,
   onGallery,
   onRemovePhoto,
+  /** When true, only show camera (duty check-in/out — no old photos). */
+  cameraOnly = false,
 }) {
   const styles = useMemo(() => createStyles(theme), [theme]);
   const accent = themeAccent(theme);
@@ -80,14 +86,20 @@ export default function ModulePhotoSection({
   return (
     <View style={styles.root}>
       <View style={styles.uploadRow}>
-        <TouchableOpacity style={styles.uploadBtn} onPress={onCamera} activeOpacity={0.85}>
+        <TouchableOpacity
+          style={[styles.uploadBtn, cameraOnly && styles.uploadBtnSolo]}
+          onPress={onCamera}
+          activeOpacity={0.85}
+        >
           <Ionicons name="camera-outline" size={18} color={accent} />
-          <Text style={styles.uploadBtnText}>Camera</Text>
+          <Text style={styles.uploadBtnText}>{cameraOnly ? 'Take photo' : 'Camera'}</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.uploadBtn} onPress={onGallery} activeOpacity={0.85}>
-          <Ionicons name="images-outline" size={18} color={accent} />
-          <Text style={styles.uploadBtnText}>Gallery</Text>
-        </TouchableOpacity>
+        {!cameraOnly && onGallery ? (
+          <TouchableOpacity style={styles.uploadBtn} onPress={onGallery} activeOpacity={0.85}>
+            <Ionicons name="images-outline" size={18} color={accent} />
+            <Text style={styles.uploadBtnText}>Gallery</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
       {photo?.uri ? (
         <View style={styles.previewWrap}>
