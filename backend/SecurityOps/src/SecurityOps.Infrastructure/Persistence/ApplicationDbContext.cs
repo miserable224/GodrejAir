@@ -26,6 +26,7 @@ public sealed class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<SecurityDeploymentLog> SecurityDeploymentLogs => Set<SecurityDeploymentLog>();
     public DbSet<SecurityDeploymentPhoto> SecurityDeploymentPhotos => Set<SecurityDeploymentPhoto>();
     public DbSet<SecurityDutySession> SecurityDutySessions => Set<SecurityDutySession>();
+    public DbSet<HousekeepingDutySession> HousekeepingDutySessions => Set<HousekeepingDutySession>();
 
     public DbSet<SecurityVendorContract> SecurityVendorContracts => Set<SecurityVendorContract>();
     public DbSet<SecurityRoleRate> SecurityRoleRates => Set<SecurityRoleRate>();
@@ -207,6 +208,24 @@ public sealed class ApplicationDbContext : DbContext, IApplicationDbContext
                 .OnDelete(DeleteBehavior.SetNull);
         });
 
+        modelBuilder.Entity<HousekeepingDutySession>(e =>
+        {
+            e.ToTable("housekeeping_duty_sessions");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.StaffName).HasMaxLength(200).IsRequired();
+            e.Property(x => x.LocationName).HasMaxLength(200).IsRequired();
+            e.Property(x => x.Designation).HasMaxLength(100);
+            e.Property(x => x.Status).HasMaxLength(20).IsRequired();
+            e.Property(x => x.EntryPhotoUrl).HasMaxLength(2000);
+            e.Property(x => x.ExitPhotoUrl).HasMaxLength(2000);
+            e.Property(x => x.EntryShift).HasMaxLength(20);
+            e.Property(x => x.ExitShift).HasMaxLength(20);
+            e.HasIndex(x => x.Status);
+            e.HasIndex(x => x.EntryShift);
+            e.HasIndex(x => x.EntryAt);
+            e.HasIndex(x => new { x.StaffName, x.Status });
+        });
+
         modelBuilder.Entity<SecurityVendorContract>(e =>
         {
             e.ToTable("security_vendor_contracts");
@@ -341,6 +360,9 @@ public sealed class ApplicationDbContext : DbContext, IApplicationDbContext
             e.Property(x => x.RoleCode).HasMaxLength(50).IsRequired();
             e.Property(x => x.RoleName).HasMaxLength(120).IsRequired();
             e.Property(x => x.MonthlyRate).HasPrecision(12, 2);
+            e.Property(x => x.HeadcountSanctioned).HasColumnName("headcount_sanctioned");
+            e.Property(x => x.ShiftTimings).HasColumnName("shift_timings").HasMaxLength(120);
+            e.Property(x => x.SkillType).HasColumnName("skill_type").HasMaxLength(40);
             e.Property(x => x.Shift1Sanctioned).HasColumnName("shift1_sanctioned");
             e.Property(x => x.Shift2Sanctioned).HasColumnName("shift2_sanctioned");
             e.Property(x => x.IsActive).HasColumnName("is_active");

@@ -16,14 +16,18 @@ public class GetHousekeepingDashboardQueryHandler
 {
     private readonly IApplicationDbContext _context;
 
-    private static readonly List<(string Code, string Name, decimal Monthly, int S1, int S2)> FallbackRates =
+    private static readonly List<HkRateRow> FallbackRates =
     [
-        ("HK_SUPERVISOR", "Housekeeping Supervisor", 22400m, 1, 1),
-        ("HK_STAFF", "Housekeeping Staff", 14850m, 12, 12),
-        ("HK_GARDENER", "Gardener", 18200m, 2, 1),
-        ("HK_ELECTRICIAN", "Electrician", 20500m, 2, 2),
-        ("HK_PLUMBER", "Plumber", 19800m, 2, 2),
-        ("HK_STP_OPERATOR", "STP/WTP/Pool Operator", 21200m, 2, 2),
+        new("HK_FM", "Facility Manager", 55000m, 1, "9:00 AM – 6:30 PM", "Skilled", 1, 0),
+        new("HK_AFM", "Assistant Facility Manager", 40000m, 1, "10:30 AM – 8:00 PM", "Skilled", 1, 0),
+        new("HK_CRM", "CRM / Accountant", 30000m, 1, "9:00 AM – 6:30 PM", "Skilled", 1, 0),
+        new("HK_FRONT_OFFICE", "Front Office Exe / Helpdesk", 28750m, 1, "9:00 AM – 6:30 PM", "Skilled", 1, 0),
+        new("HK_SUPERVISOR", "Housekeeping Supervisor", 20000m, 1, "8:30 AM – 5:30 PM", "Skilled", 1, 0),
+        new("HK_STAFF", "Housekeeping Staff", 16865m, 24, "24 Hours (Shifts)", "Skilled", 12, 12),
+        new("HK_GARDENER", "Gardener", 16865m, 3, "8:30 AM – 5:30 PM", "Skilled", 3, 0),
+        new("HK_ELECTRICIAN", "Electrician", 25300m, 4, "24 Hours (Shifts)", "Skilled", 2, 2),
+        new("HK_PLUMBER", "Plumber", 25300m, 4, "24 Hours (Shifts)", "Skilled", 2, 2),
+        new("HK_STP_OPERATOR", "STP/WTP/Pool Operator", 27025m, 4, "24 Hours (Shifts)", "Skilled", 2, 2),
     ];
 
     public GetHousekeepingDashboardQueryHandler(IApplicationDbContext context) => _context = context;
@@ -65,7 +69,8 @@ public class GetHousekeepingDashboardQueryHandler
         var roleRows = new List<HkRoleRowDto>();
         foreach (var rate in rates)
         {
-            var expected = Math.Max(rate.Shift1Sanctioned, rate.Shift2Sanctioned);
+            var s1Sanctioned = rate.Shift1Sanctioned;
+            var s2Sanctioned = rate.Shift2Sanctioned;
             var s1Samples = new List<int>();
             var s2Samples = new List<int>();
 
@@ -76,7 +81,7 @@ public class GetHousekeepingDashboardQueryHandler
                     l.LogDate >= day && l.LogDate < dayEnd &&
                     RoleKey(l.Designation) == NormalizeKey(rate.RoleName));
 
-                var (s1, s2) = SplitDeployed(dayCountForRole, expected);
+                var (s1, s2) = SplitDeployed(dayCountForRole, s1Sanctioned, s2Sanctioned);
                 s1Samples.Add(s1);
                 s2Samples.Add(s2);
             }
@@ -88,7 +93,13 @@ public class GetHousekeepingDashboardQueryHandler
             {
                 RoleCode = rate.RoleCode,
                 Role = rate.RoleName,
-                Expected = expected,
+                Expected = Math.Max(s1Sanctioned, s2Sanctioned),
+                ExpectedShift1 = s1Sanctioned,
+                ExpectedShift2 = s2Sanctioned,
+                HeadcountSanctioned = rate.HeadcountSanctioned,
+                MonthlyRate = rate.MonthlyRate,
+                ShiftTimings = rate.ShiftTimings ?? "",
+                SkillType = rate.SkillType ?? "Skilled",
                 ActualS1 = actualS1,
                 ActualS2 = actualS2,
                 DeploymentCount = hkLogs.Count(l => RoleKey(l.Designation) == NormalizeKey(rate.RoleName)),
@@ -96,9 +107,10 @@ public class GetHousekeepingDashboardQueryHandler
         }
 
         var totalDeployed = roleRows.Sum(r => r.ActualS1 + r.ActualS2);
-        var totalRequired = roleRows.Sum(r => r.Expected * 2);
+        var totalRequired = rates.Sum(r => r.Shift1Sanctioned + r.Shift2Sanctioned);
         var totalShortage = Math.Max(0, totalRequired - totalDeployed);
         var estimatedWages = EstimateWages(roleRows, rates, dayCount);
+        var contractMonthlyTotal = rates.Sum(r => r.MonthlyRate * Math.Max(1, r.HeadcountSanctioned));
 
         return new HousekeepingDashboardDto
         {
@@ -110,6 +122,7 @@ public class GetHousekeepingDashboardQueryHandler
             TotalRequired = totalRequired,
             TotalShortage = totalShortage,
             EstimatedWages = Math.Round(estimatedWages, 0),
+            ContractMonthlyTotal = Math.Round(contractMonthlyTotal, 0),
             Roles = roleRows,
         };
     }
@@ -129,10 +142,14 @@ public class GetHousekeepingDashboardQueryHandler
             {
                 return contract.RoleRates
                     .Where(r => r.IsActive)
+                    .OrderBy(r => r.RoleCode)
                     .Select(r => new HkRateRow(
                         r.RoleCode,
                         r.RoleName,
                         r.MonthlyRate,
+                        r.HeadcountSanctioned,
+                        r.ShiftTimings,
+                        r.SkillType,
                         r.Shift1Sanctioned,
                         r.Shift2Sanctioned))
                     .ToList();
@@ -143,9 +160,7 @@ public class GetHousekeepingDashboardQueryHandler
             // Tables may not exist until migration 015 is applied.
         }
 
-        return FallbackRates
-            .Select(r => new HkRateRow(r.Code, r.Name, r.Monthly, r.S1, r.S2))
-            .ToList();
+        return FallbackRates.ToList();
     }
 
     private static bool MatchesHkRole(string? designation, List<(HkRateRow Rate, string Key)> matchers)
@@ -155,15 +170,16 @@ public class GetHousekeepingDashboardQueryHandler
         return matchers.Any(m => m.Key == key || key.Contains(m.Key) || m.Key.Contains(key));
     }
 
-    private static (int S1, int S2) SplitDeployed(int count, int expectedPerShift)
+    private static (int S1, int S2) SplitDeployed(int count, int s1Cap, int s2Cap)
     {
         var s1 = 0;
         var s2 = 0;
         for (var i = 0; i < count; i++)
         {
-            if (s1 < expectedPerShift) s1++;
-            else if (s2 < expectedPerShift) s2++;
-            else s1++;
+            if (s1 < s1Cap) s1++;
+            else if (s2 < s2Cap) s2++;
+            else if (s1Cap > 0) s1++;
+            else if (s2Cap > 0) s2++;
         }
         return (s1, s2);
     }
@@ -202,7 +218,15 @@ public class GetHousekeepingDashboardQueryHandler
 
     private static string RoleKey(string? designation) => NormalizeKey(designation);
 
-    private sealed record HkRateRow(string RoleCode, string RoleName, decimal MonthlyRate, int Shift1Sanctioned, int Shift2Sanctioned);
+    private sealed record HkRateRow(
+        string RoleCode,
+        string RoleName,
+        decimal MonthlyRate,
+        int HeadcountSanctioned,
+        string? ShiftTimings,
+        string? SkillType,
+        int Shift1Sanctioned,
+        int Shift2Sanctioned);
 }
 
 public class HousekeepingDashboardDto
@@ -215,6 +239,7 @@ public class HousekeepingDashboardDto
     public int TotalRequired { get; set; }
     public int TotalShortage { get; set; }
     public decimal EstimatedWages { get; set; }
+    public decimal ContractMonthlyTotal { get; set; }
     public string? Message { get; set; }
     public List<HkRoleRowDto> Roles { get; set; } = new();
 
@@ -226,6 +251,12 @@ public class HkRoleRowDto
     public string RoleCode { get; set; } = "";
     public string Role { get; set; } = "";
     public int Expected { get; set; }
+    public int ExpectedShift1 { get; set; }
+    public int ExpectedShift2 { get; set; }
+    public int HeadcountSanctioned { get; set; }
+    public decimal MonthlyRate { get; set; }
+    public string ShiftTimings { get; set; } = "";
+    public string SkillType { get; set; } = "Skilled";
     public int ActualS1 { get; set; }
     public int ActualS2 { get; set; }
     public int DeploymentCount { get; set; }

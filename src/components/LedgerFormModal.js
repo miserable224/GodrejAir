@@ -24,9 +24,12 @@ export default function LedgerFormModal({
   children,
   footer,
   maxHeight = '88%',
+  /** When false, form body does not scroll — use for compact duty check-in/out sheets. */
+  scrollable = true,
+  sheetMaxWidth = 400,
   theme = SEC,
 }) {
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const styles = useMemo(() => createStyles(theme, sheetMaxWidth), [theme, sheetMaxWidth]);
 
   return (
     <Modal
@@ -56,15 +59,19 @@ export default function LedgerFormModal({
                 <Ionicons name="close" size={22} color={theme.textMuted} />
               </Pressable>
             </View>
-            <ScrollView
-              style={styles.scroll}
-              contentContainerStyle={styles.scrollContent}
-              keyboardShouldPersistTaps="always"
-              nestedScrollEnabled
-              showsVerticalScrollIndicator={false}
-            >
-              {children}
-            </ScrollView>
+            {scrollable ? (
+              <ScrollView
+                style={styles.scroll}
+                contentContainerStyle={styles.scrollContent}
+                keyboardShouldPersistTaps="always"
+                nestedScrollEnabled
+                showsVerticalScrollIndicator={false}
+              >
+                {children}
+              </ScrollView>
+            ) : (
+              <View style={styles.bodyStatic}>{children}</View>
+            )}
             {footer ? <View style={styles.footer}>{footer}</View> : null}
           </View>
         </KeyboardAvoidingView>
@@ -98,7 +105,7 @@ export function ModuleSaveButton({ label, onPress, loading, disabled, theme = SE
   );
 }
 
-function createStyles(theme) {
+function createStyles(theme, sheetMaxWidth = 400) {
   return StyleSheet.create({
     overlay: {
       flex: 1,
@@ -110,7 +117,7 @@ function createStyles(theme) {
     },
     sheetHost: {
       width: '100%',
-      maxWidth: 380,
+      maxWidth: sheetMaxWidth,
       alignSelf: 'center',
       zIndex: 10,
       ...Platform.select({
@@ -163,6 +170,10 @@ function createStyles(theme) {
     },
     scrollContent: {
       paddingBottom: 8,
+    },
+    bodyStatic: {
+      flexShrink: 0,
+      paddingBottom: 4,
     },
     footer: {
       flexShrink: 0,

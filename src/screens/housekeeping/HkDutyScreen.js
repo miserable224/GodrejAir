@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  TextInput,
   Alert,
   ActivityIndicator,
   StatusBar,
@@ -16,34 +15,25 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS, SIZES, DARK } from '../../constants/theme';
+import { ADMIN_MANPOWER_DEPLOYMENT } from '../../constants/data';
 import { useAuth } from '../../context/AuthContext';
 import ModulePhotoSection from '../../components/ModulePhotoSection';
+import { pickGeoPhotoFromCamera, pickGeoPhotoFromLibrary } from '../../utils/geoPhoto';
+import { fetchStaff } from '../../modules/security/services/securityService';
 import {
-  pickGeoPhotoFromCamera,
-  pickGeoPhotoFromLibrary,
-} from '../../utils/geoPhoto';
-import {
-  fetchOpenDutySession,
-  fetchOnDutySessions,
-  fetchStaff,
-  postDutyCheckIn,
-  postDutyCheckOut,
-} from '../../modules/security/services/securityService';
+  fetchOpenHkDutySession,
+  fetchOnDutyHkSessions,
+  postHkDutyCheckIn,
+  postHkDutyCheckOut,
+} from '../../modules/housekeeping/services/housekeepingService';
 import {
   filterNamesAvailableForCheckIn,
   isStaffOnDuty,
 } from '../../modules/security/utils/dutyStaffOptions';
 import { ensureValidAccessToken } from '../../modules/shared/services/authService';
 
-const LOCATION_OPTIONS = [
-  'Main Gate',
-  'Service / Rear Gate',
-  'Visitor / Delivery Gate',
-  'Tower A — Lobby & ground',
-  'Tower B — Lobby & ground',
-  'Office / Control Room',
-  'Perimeter / External patrol',
-];
+const HK_ROLES = ADMIN_MANPOWER_DEPLOYMENT.filter((r) => r.category === 'FM_HK').map((r) => r.role);
+const HK_DUTY_DEFAULT_LOCATION = 'On site';
 
 const PHOTO_THEME = {
   accent: DARK.teal,
@@ -68,23 +58,22 @@ function formatTime(iso) {
   }
 }
 
-export default function GuardDutyScreen({ navigation, route }) {
+export default function HkDutyScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const { user, token } = useAuth();
   const initialMode = route?.params?.mode === 'check-out' ? 'check-out' : 'check-in';
 
   const [dutyMode, setDutyMode] = useState(initialMode);
   const [staffName, setStaffName] = useState(user?.name || '');
-  const [locationName, setLocationName] = useState(LOCATION_OPTIONS[0]);
-  const [designation, setDesignation] = useState('');
+  const [designation, setDesignation] = useState(HK_ROLES[0] || 'Housekeeping Staff');
   const [photo, setPhoto] = useState(null);
   const [openSession, setOpenSession] = useState(null);
   const [roster, setRoster] = useState([]);
   const [onDutySessions, setOnDutySessions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [locationPickerOpen, setLocationPickerOpen] = useState(false);
   const [staffPickerOpen, setStaffPickerOpen] = useState(false);
+  const [designationPickerOpen, setDesignationPickerOpen] = useState(false);
 
   const isOnDuty = openSession?.status === 'open';
 
@@ -99,7 +88,7 @@ export default function GuardDutyScreen({ navigation, route }) {
       setOpenSession(null);
       return;
     }
-    const session = await fetchOpenDutySession(accessToken, name.trim());
+    const session = await fetchOpenHkDutySession(accessToken, name.trim());
     setOpenSession(session);
   }, [token]);
 
@@ -112,7 +101,7 @@ export default function GuardDutyScreen({ navigation, route }) {
         if (accessToken) {
           const [staff, onDuty] = await Promise.all([
             fetchStaff(accessToken),
-            fetchOnDutySessions(accessToken),
+            fetchOnDutyHkSessions(accessToken),
           ]);
           if (!cancelled && Array.isArray(staff)) {
             setRoster(staff.filter((s) => (s.isActive ?? s.IsActive) !== false));
@@ -123,9 +112,7 @@ export default function GuardDutyScreen({ navigation, route }) {
         }
         if (!cancelled) await refreshOpenSession(staffName);
       } catch (err) {
-        if (!cancelled) {
-          console.warn('Duty screen load:', err?.message);
-        }
+        if (!cancelled) console.warn('HK duty screen load:', err?.message);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -153,7 +140,6 @@ export default function GuardDutyScreen({ navigation, route }) {
 
   const onCheckIn = async () => {
     const name = staffName.trim();
-    const loc = locationName.trim();
     if (!name) {
       Alert.alert('Staff name', 'Enter or select your name.');
       return;
@@ -163,10 +149,6 @@ export default function GuardDutyScreen({ navigation, route }) {
         'Already on duty',
         `${name} is already checked in. Check out before a new check-in.`,
       );
-      return;
-    }
-    if (!loc) {
-      Alert.alert('Location', 'Select the post you are reporting to.');
       return;
     }
     if (!photo?.uri && !photo?.file) {
@@ -182,9 +164,9 @@ export default function GuardDutyScreen({ navigation, route }) {
 
     setSaving(true);
     try {
-      const session = await postDutyCheckIn(accessToken, {
+      const session = await postHkDutyCheckIn(accessToken, {
         staffName: name,
-        locationName: loc,
+        locationName: HK_DUTY_DEFAULT_LOCATION,
         designation: designation.trim() || null,
         photo,
         latitude: photo.latitude ?? null,
@@ -194,9 +176,9 @@ export default function GuardDutyScreen({ navigation, route }) {
       });
       setOpenSession(session);
       setPhoto(null);
-      const onDuty = await fetchOnDutySessions(accessToken);
+      const onDuty = await fetchOnDutyHkSessions(accessToken);
       setOnDutySessions(Array.isArray(onDuty) ? onDuty : []);
-      Alert.alert('Checked in', `On duty at ${loc} since ${formatTime(session.entryAt)}.`);
+      Alert.alert('Checked in', `On duty since ${formatTime(session.entryAt)}.`);
     } catch (err) {
       Alert.alert('Check-in failed', err?.message || 'Could not save check-in.');
     } finally {
@@ -206,7 +188,7 @@ export default function GuardDutyScreen({ navigation, route }) {
 
   const onCheckOut = async () => {
     if (!openSession?.id) {
-      Alert.alert('Not on duty', 'No open check-in found for this guard.');
+      Alert.alert('Not on duty', 'No open check-in found for this staff member.');
       return;
     }
 
@@ -218,7 +200,7 @@ export default function GuardDutyScreen({ navigation, route }) {
 
     setSaving(true);
     try {
-      const session = await postDutyCheckOut(accessToken, openSession.id, {
+      const session = await postHkDutyCheckOut(accessToken, openSession.id, {
         photo: photo?.uri || photo?.file ? photo : null,
         latitude: photo?.latitude ?? null,
         longitude: photo?.longitude ?? null,
@@ -229,9 +211,10 @@ export default function GuardDutyScreen({ navigation, route }) {
       setPhoto(null);
       Alert.alert(
         'Checked out',
-        session.durationMinutes != null
-          ? `Duty ended (${session.durationMinutes} min on post).`
-          : 'Duty session closed.',
+        session.durationLabel
+          || (session.durationMinutes != null
+            ? `Duty ended (${session.durationMinutes} min).`
+            : 'Duty session closed.'),
       );
     } catch (err) {
       Alert.alert('Check-out failed', err?.message || 'Could not save check-out.');
@@ -240,21 +223,11 @@ export default function GuardDutyScreen({ navigation, route }) {
     }
   };
 
-  const pickCamera = async () => {
-    const p = await pickGeoPhotoFromCamera();
-    if (p) setPhoto(p);
-  };
-
-  const pickGallery = async () => {
-    const p = await pickGeoPhotoFromLibrary();
-    if (p) setPhoto(p);
-  };
-
   return (
     <View style={styles.root}>
       <StatusBar barStyle="light-content" />
       <LinearGradient
-        colors={[COLORS.primaryDark, COLORS.primary]}
+        colors={['#0F766E', '#14B8A6']}
         style={[styles.header, { paddingTop: insets.top + 8 }]}
       >
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
@@ -263,7 +236,7 @@ export default function GuardDutyScreen({ navigation, route }) {
         <Text style={styles.headerTitle}>
           {dutyMode === 'check-out' ? 'Check out' : 'Check in'}
         </Text>
-        <Text style={styles.headerSub}>Security duty at post</Text>
+        <Text style={styles.headerSub}>Housekeeping duty</Text>
       </LinearGradient>
 
       {loading ? (
@@ -281,9 +254,7 @@ export default function GuardDutyScreen({ navigation, route }) {
               <Ionicons name="radio-button-on" size={20} color="#22C55E" />
               <View style={styles.statusTextWrap}>
                 <Text style={styles.statusTitle}>On duty</Text>
-                <Text style={styles.statusSub}>
-                  {openSession.staffName} · {openSession.locationName}
-                </Text>
+                <Text style={styles.statusSub}>{openSession.staffName}</Text>
                 <Text style={styles.statusMeta}>Since {formatTime(openSession.entryAt)}</Text>
               </View>
             </View>
@@ -294,14 +265,14 @@ export default function GuardDutyScreen({ navigation, route }) {
             </View>
           )}
 
-          <Text style={styles.label}>Guard name</Text>
+          <Text style={styles.label}>Staff name</Text>
           <TouchableOpacity
             style={styles.pickerBtn}
             onPress={() => {
               if (dutyMode === 'check-in' && !isOnDuty && checkInStaffOptions.length === 0) {
                 Alert.alert(
                   'Everyone on duty',
-                  'All guards are already checked in. Check someone out first.',
+                  'All listed staff are already checked in. Check someone out first.',
                 );
                 return;
               }
@@ -309,54 +280,44 @@ export default function GuardDutyScreen({ navigation, route }) {
             }}
             activeOpacity={0.85}
           >
-            <Text style={styles.pickerBtnText}>{staffName || 'Select guard'}</Text>
+            <Text style={styles.pickerBtnText}>{staffName || 'Select staff'}</Text>
             <Ionicons name="chevron-down" size={18} color={DARK.muted} />
           </TouchableOpacity>
 
           {dutyMode === 'check-in' && !isOnDuty ? (
             <>
-              <Text style={styles.label}>Post / location</Text>
+              <Text style={styles.label}>Designation</Text>
               <TouchableOpacity
                 style={styles.pickerBtn}
-                onPress={() => setLocationPickerOpen(true)}
+                onPress={() => setDesignationPickerOpen(true)}
                 activeOpacity={0.85}
               >
-                <Text style={styles.pickerBtnText}>{locationName}</Text>
+                <Text style={styles.pickerBtnText}>{designation}</Text>
                 <Ionicons name="chevron-down" size={18} color={DARK.muted} />
               </TouchableOpacity>
-
-              <Text style={styles.label}>Designation (optional)</Text>
-              <TextInput
-                style={styles.input}
-                value={designation}
-                onChangeText={setDesignation}
-                placeholder="e.g. Security Guard"
-                placeholderTextColor={DARK.muted}
-              />
             </>
           ) : null}
 
           <Text style={styles.label}>
-            {dutyMode === 'check-out'
-              ? 'Check-out photo (optional)'
-              : 'Check-in photo (required)'}
+            {dutyMode === 'check-out' ? 'Check-out photo (optional)' : 'Check-in photo (required)'}
           </Text>
           <ModulePhotoSection
             theme={PHOTO_THEME}
             photo={photo}
-            onCamera={pickCamera}
-            onGallery={pickGallery}
+            onCamera={async () => {
+              const p = await pickGeoPhotoFromCamera();
+              if (p) setPhoto(p);
+            }}
+            onGallery={async () => {
+              const p = await pickGeoPhotoFromLibrary();
+              if (p) setPhoto(p);
+            }}
             onRemovePhoto={() => setPhoto(null)}
           />
 
           <View style={styles.dualActionRow}>
             <TouchableOpacity
-              style={[
-                styles.dualBtn,
-                styles.dualBtnIn,
-                saving && styles.btnDisabled,
-                dutyMode === 'check-in' && styles.dualBtnActive,
-              ]}
+              style={[styles.dualBtn, styles.dualBtnIn, dutyMode === 'check-in' && styles.dualBtnActive]}
               onPress={() => setDutyMode('check-in')}
               disabled={saving}
             >
@@ -364,12 +325,7 @@ export default function GuardDutyScreen({ navigation, route }) {
               <Text style={styles.dualBtnTextIn}>Check in</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[
-                styles.dualBtn,
-                styles.dualBtnOut,
-                saving && styles.btnDisabled,
-                dutyMode === 'check-out' && styles.dualBtnActiveOut,
-              ]}
+              style={[styles.dualBtn, styles.dualBtnOut, dutyMode === 'check-out' && styles.dualBtnActiveOut]}
               onPress={() => setDutyMode('check-out')}
               disabled={saving}
             >
@@ -413,25 +369,14 @@ export default function GuardDutyScreen({ navigation, route }) {
       )}
 
       <PickerModal
-        visible={locationPickerOpen}
-        title="Select post"
-        options={LOCATION_OPTIONS}
-        onSelect={(v) => {
-          setLocationName(v);
-          setLocationPickerOpen(false);
-        }}
-        onClose={() => setLocationPickerOpen(false)}
-      />
-
-      <PickerModal
         visible={staffPickerOpen}
-        title="Select guard"
+        title="Select staff"
         options={
           staffPickerOptions.length
             ? staffPickerOptions
             : dutyMode === 'check-in' && !isOnDuty
               ? []
-              : [staffName || 'Guard']
+              : [staffName || 'Staff']
         }
         onSelect={(v) => {
           setStaffName(v);
@@ -439,6 +384,16 @@ export default function GuardDutyScreen({ navigation, route }) {
           refreshOpenSession(v);
         }}
         onClose={() => setStaffPickerOpen(false)}
+      />
+      <PickerModal
+        visible={designationPickerOpen}
+        title="Select designation"
+        options={HK_ROLES}
+        onSelect={(v) => {
+          setDesignation(v);
+          setDesignationPickerOpen(false);
+        }}
+        onClose={() => setDesignationPickerOpen(false)}
       />
     </View>
   );
@@ -510,17 +465,6 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     marginTop: 4,
   },
-  input: {
-    backgroundColor: DARK.card,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: DARK.inputBorder,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    color: DARK.text,
-    fontSize: 15,
-    marginBottom: 16,
-  },
   pickerBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -534,12 +478,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   pickerBtnText: { fontSize: 15, fontWeight: '600', color: DARK.text, flex: 1 },
-  dualActionRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 8,
-    marginBottom: 10,
-  },
+  dualActionRow: { flexDirection: 'row', gap: 10, marginTop: 8, marginBottom: 10 },
   dualBtn: {
     flex: 1,
     flexDirection: 'row',
@@ -558,14 +497,8 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(220, 38, 38, 0.4)',
     backgroundColor: 'rgba(220, 38, 38, 0.1)',
   },
-  dualBtnActive: {
-    borderWidth: 2,
-    borderColor: '#2563EB',
-  },
-  dualBtnActiveOut: {
-    borderWidth: 2,
-    borderColor: '#DC2626',
-  },
+  dualBtnActive: { borderWidth: 2, borderColor: '#2563EB' },
+  dualBtnActiveOut: { borderWidth: 2, borderColor: '#DC2626' },
   dualBtnTextIn: { fontSize: 14, fontWeight: '700', color: '#93C5FD' },
   dualBtnTextOut: { fontSize: 14, fontWeight: '700', color: '#FCA5A5' },
   primaryBtn: {
@@ -575,7 +508,7 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingVertical: 16,
     borderRadius: 14,
-    backgroundColor: DARK.teal,
+    backgroundColor: '#0F766E',
   },
   checkOutBtn: { backgroundColor: '#DC2626' },
   primaryBtnText: { color: '#FFF', fontSize: 16, fontWeight: '800' },
@@ -583,11 +516,7 @@ const styles = StyleSheet.create({
 });
 
 const modalStyles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
-  },
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   sheet: {
     maxHeight: '70%',
     backgroundColor: DARK.card,

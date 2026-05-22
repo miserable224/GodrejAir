@@ -26,8 +26,23 @@ export function matchHkRoleRate(deploymentRole, rates) {
   const direct = rates.find((x) => normalizeRoleKey(x.roleName) === key);
   if (direct) return direct;
 
+  if (key.includes('FACILITY') && key.includes('MANAGER') && !key.includes('ASSISTANT')) {
+    return rates.find((x) => x.roleCode === 'HK_FM') || null;
+  }
+  if (key.includes('ASSISTANT') && key.includes('FACILITY')) {
+    return rates.find((x) => x.roleCode === 'HK_AFM') || null;
+  }
+  if (key.includes('CRM') || key.includes('ACCOUNTANT')) {
+    return rates.find((x) => x.roleCode === 'HK_CRM') || null;
+  }
+  if (key.includes('FRONT') && key.includes('OFFICE')) {
+    return rates.find((x) => x.roleCode === 'HK_FRONT_OFFICE') || null;
+  }
   if (key.includes('HOUSEKEEPING') && key.includes('STAFF')) {
     return rates.find((x) => x.roleCode === 'HK_STAFF') || null;
+  }
+  if (key.includes('HOUSEKEEPING') && key.includes('SUPERVISOR')) {
+    return rates.find((x) => x.roleCode === 'HK_SUPERVISOR') || null;
   }
   if (key.includes('SUPERVISOR')) {
     return rates.find((x) => x.roleCode === 'HK_SUPERVISOR') || null;
@@ -80,19 +95,22 @@ export function buildHkContractDisplayRows(staffCounts, entries, demoActuals) {
     const template = staffCounts.find(
       (c) => c.category === 'FM_HK' && normalizeRoleKey(c.role) === normalizeRoleKey(rate.roleName),
     );
-    const expected = Math.max(
-      template?.expected ?? 0,
-      rate.shift1Sanctioned,
-      rate.shift2Sanctioned,
-    );
+    const expectedS1 = rate.shift1Sanctioned;
+    const expectedS2 = rate.shift2Sanctioned;
     const demo = demoActuals?.[rate.roleName];
     return {
       id: template?.id ?? `hk-${rate.roleCode}`,
       category: 'FM_HK',
       role: rate.roleName,
-      expected,
-      type: template?.type ?? 'Skilled',
-      shift: template?.shift,
+      expected: Math.max(expectedS1, expectedS2, template?.expected ?? 0),
+      expectedS1,
+      expectedS2,
+      headcountSanctioned: rate.headcountSanctioned,
+      monthlyRate: rate.monthlyRate,
+      shiftTimings: rate.shiftTimings,
+      skillType: rate.skillType,
+      type: template?.type ?? rate.skillType ?? 'Skilled',
+      shift: template?.shift ?? rate.shiftTimings,
       actualS1: demo?.s1 ?? 0,
       actualS2: demo?.s2 ?? 0,
     };
@@ -112,7 +130,10 @@ export function buildHkContractDisplayRows(staffCounts, entries, demoActuals) {
         id: `hk-deploy-${roleKey}`,
         category: 'FM_HK',
         role: entry.designation,
-        expected: rate?.shift1Sanctioned ?? 1,
+        expected: Math.max(rate?.shift1Sanctioned ?? 0, rate?.shift2Sanctioned ?? 0, 1),
+        expectedS1: rate?.shift1Sanctioned ?? 1,
+        expectedS2: rate?.shift2Sanctioned ?? 0,
+        monthlyRate: rate?.monthlyRate ?? 0,
         actualS1: 0,
         actualS2: 0,
       });
