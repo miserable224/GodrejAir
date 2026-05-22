@@ -260,40 +260,49 @@ export async function pickGeoPhotoFromLibrary() {
   return attachGeo(photoBase);
 }
 
-export async function pickGeoPhotoFromCamera() {
-  if (Platform.OS === 'web') {
-    const libPerm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!libPerm.granted) {
-      Alert.alert('Permission needed', 'Allow photo access to attach an image.');
-      return null;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 0.85,
-      exif: true,
-    });
-    if (result.canceled) return null;
-    const photoBase = photoFromPickerAsset(result.assets?.[0]);
-    if (!photoBase) return null;
-    return attachGeo(photoBase);
-  }
+const CAMERA_PICKER_OPTIONS = {
+  mediaTypes: ['images'],
+  quality: 0.85,
+  exif: true,
+  allowsEditing: false,
+};
+
+/** Duty check-in/out: live camera only (no gallery / file picker). */
+export async function pickGeoPhotoForDuty() {
+  return pickGeoPhotoFromCamera({ dutyOnly: true });
+}
+
+/**
+ * Capture a new photo with the device camera (includes mobile web `capture=camera`).
+ * @param {{ dutyOnly?: boolean }} [opts] — when true, never falls back to photo library
+ */
+export async function pickGeoPhotoFromCamera(opts = {}) {
+  const { dutyOnly = false } = opts;
 
   const camPerm = await ImagePicker.requestCameraPermissionsAsync();
   if (!camPerm.granted) {
-    Alert.alert('Permission needed', 'Allow camera access to take a photo.');
+    Alert.alert(
+      'Permission needed',
+      Platform.OS === 'web'
+        ? 'Allow camera access when the browser asks so you can take a verification photo.'
+        : 'Allow camera access to take a verification photo.',
+    );
     return null;
   }
+
   let result;
   try {
-    result = await ImagePicker.launchCameraAsync({
-      quality: 0.85,
-      mediaTypes: ['images'],
-      exif: true,
-    });
+    result = await ImagePicker.launchCameraAsync(CAMERA_PICKER_OPTIONS);
   } catch {
-    Alert.alert('Camera unavailable', 'Use Gallery to attach a photo instead.');
+    Alert.alert(
+      'Camera unavailable',
+      dutyOnly
+        ? 'Could not open the camera. Enable camera permission and try again.'
+        : 'Could not open the camera on this device.',
+    );
     return null;
   }
+
   if (result.canceled) return null;
   const photoBase = photoFromPickerAsset(result.assets?.[0]);
   if (!photoBase) return null;

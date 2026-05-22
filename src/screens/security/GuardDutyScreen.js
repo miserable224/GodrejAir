@@ -18,10 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS, SIZES, DARK } from '../../constants/theme';
 import { useAuth } from '../../context/AuthContext';
 import ModulePhotoSection from '../../components/ModulePhotoSection';
-import {
-  pickGeoPhotoFromCamera,
-  pickGeoPhotoFromLibrary,
-} from '../../utils/geoPhoto';
+import { pickGeoPhotoForDuty } from '../../utils/geoPhoto';
 import {
   fetchOpenDutySession,
   fetchOnDutySessions,
@@ -241,12 +238,7 @@ export default function GuardDutyScreen({ navigation, route }) {
   };
 
   const pickCamera = async () => {
-    const p = await pickGeoPhotoFromCamera();
-    if (p) setPhoto(p);
-  };
-
-  const pickGallery = async () => {
-    const p = await pickGeoPhotoFromLibrary();
+    const p = await pickGeoPhotoForDuty();
     if (p) setPhoto(p);
   };
 
@@ -345,8 +337,8 @@ export default function GuardDutyScreen({ navigation, route }) {
             theme={PHOTO_THEME}
             photo={photo}
             onCamera={pickCamera}
-            onGallery={pickGallery}
             onRemovePhoto={() => setPhoto(null)}
+            cameraOnly
           />
 
           <View style={styles.dualActionRow}>

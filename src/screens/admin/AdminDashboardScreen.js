@@ -79,6 +79,7 @@ const SECURITY_DEPLOY_RANGE_MAP = {
 import {
   formatGeoCaption,
   locationLabelFromPhoto,
+  pickGeoPhotoForDuty,
   pickGeoPhotoFromCamera,
   pickGeoPhotoFromLibrary,
 } from '../../utils/geoPhoto';
@@ -1937,7 +1938,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
 
   const pickStaffPhotoFromCamera = async () => {
     try {
-      const photo = await pickGeoPhotoFromCamera();
+      const photo = await pickGeoPhotoForDuty();
       if (photo) setStaffAttendancePhoto(photo);
     } catch (err) {
       console.log('Error taking photo:', err);
@@ -2869,7 +2870,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
                 onPress={pickStaffPhotoFromCamera}
               >
                 <Ionicons name="camera-outline" size={18} color={SEC.teal} />
-                <Text style={styles.secUploadBtnText}>Camera</Text>
+                <Text style={styles.secUploadBtnText}>Take photo</Text>
               </TouchableOpacity>
               {staffAttendancePhoto?.uri ? (
                 <View style={[styles.secPhotoPreviewWrap, styles.dutyPhotoPreviewWrap]}>
@@ -2993,7 +2994,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
                 onPress={pickStaffPhotoFromCamera}
               >
                 <Ionicons name="camera-outline" size={18} color={SEC.teal} />
-                <Text style={styles.secUploadBtnText}>Camera</Text>
+                <Text style={styles.secUploadBtnText}>Take photo</Text>
               </TouchableOpacity>
               {staffAttendancePhoto?.uri ? (
                 <View style={[styles.secPhotoPreviewWrap, styles.dutyPhotoPreviewWrap]}>
