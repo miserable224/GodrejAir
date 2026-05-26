@@ -12,6 +12,17 @@ function parseDMY(value) {
   return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate());
 }
 
+function parseNum(value) {
+  if (value == null) return 0;
+  if (typeof value === 'number') return value;
+  const cleaned = String(value).trim().replace(',', '.');
+  const num = parseFloat(cleaned);
+  return Number.isNaN(num) ? 0 : num;
+}
+
+/** Tariff used by the vendor cost summary card. 13 paise / litre = ₹130 / KL. */
+export const WATER_RATE_PER_KL = 130;
+
 export function computeWaterDashboard({
   waterRecords,
   waterFilter,
@@ -20,6 +31,13 @@ export function computeWaterDashboard({
   waterSourceFilter,
   waterTankerFilter,
   tankCapacityKl,
+  /**
+   * Static baseline level of the reservoir (in KL). Used when none of the
+   * tanker records carry an explicit `tankLevelKl` reading, so the capacity
+   * card can still show "X of Y KL". Treat 1 m³ = 1 KL.
+   */
+  tankBaselineKl = 0,
+  waterVendors = [],
 }) {
   const now = new Date();
   const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -63,29 +81,35 @@ export function computeWaterDashboard({
   const tankerOptions = Array.from(
     new Set(
       recordsInRangeBase
-        .filter((r) => (r.sourceType || 'tanker') === 'tanker')
-        .map((r) => r.vehicleNo),
+          .filter((r) => (r.sourceType || 'tanker') === 'tanker')
+          .map((r) => r.vehicleNo),
     ),
   ).filter(Boolean);
 
-  const totalLoads = recordsInRange.reduce((s, r) => s + Number(r.load || 0), 0);
+  const totalLoads = recordsInRange.reduce((s, r) => s + parseNum(r.load), 0);
   const avgTds =
     recordsInRange.length > 0
-      ? Math.round(recordsInRange.reduce((s, r) => s + Number(r.tds || 0), 0) / recordsInRange.length)
+      ? Math.round(recordsInRange.reduce((s, r) => s + parseNum(r.tds), 0) / recordsInRange.length)
       : 0;
   const latest = recordsInRange[recordsInRange.length - 1];
-  const latestInflow = Math.max(0, Number(latest?.closingMeter || 0) - Number(latest?.openingMeter || 0));
-  const periodStartMeter = recordsInRange.length ? Number(recordsInRange[0].openingMeter || 0) : 0;
+  const latestInflow = Math.max(0, parseNum(latest?.closingMeter) - parseNum(latest?.openingMeter));
+  const periodStartMeter = recordsInRange.length ? parseNum(recordsInRange[0].openingMeter) : 0;
   const periodEndMeter = recordsInRange.length
-    ? Number(recordsInRange[recordsInRange.length - 1].closingMeter || 0)
+    ? parseNum(recordsInRange[recordsInRange.length - 1].closingMeter)
     : 0;
   const netDelta = Math.max(0, periodEndMeter - periodStartMeter);
-  const latestTankLevelKl = Number(latest?.tankLevelKl || 0);
-  const safeCapacity = Math.max(1, Number(tankCapacityKl || 0));
+  const latestRecordedTankLevelKl = parseNum(latest?.tankLevelKl);
+  const baselineKl = parseNum(tankBaselineKl);
+  // Records that don't carry a tank-level reading shouldn't blank out the
+  // reservoir level; fall back to the configured baseline.
+  const latestTankLevelKl = latestRecordedTankLevelKl > 0
+    ? latestRecordedTankLevelKl
+    : baselineKl;
+  const safeCapacity = Math.max(1, parseNum(tankCapacityKl));
   const tankFillPct = Math.max(0, Math.min(100, (latestTankLevelKl / safeCapacity) * 100));
 
   const totalInflowMeter = recordsInRange.reduce(
-    (s, r) => s + Math.max(0, Number(r.closingMeter || 0) - Number(r.openingMeter || 0)),
+    (s, r) => s + Math.max(0, parseNum(r.closingMeter) - parseNum(r.openingMeter)),
     0,
   );
 
@@ -105,14 +129,14 @@ export function computeWaterDashboard({
 
   const tankDrops = recordsInRange.reduce((s, r, idx, arr) => {
     if (idx === 0) return s;
-    const prev = Number(arr[idx - 1]?.tankLevelKl || 0);
-    const curr = Number(r?.tankLevelKl || 0);
+    const prev = parseNum(arr[idx - 1]?.tankLevelKl);
+    const curr = parseNum(r?.tankLevelKl);
     return s + Math.max(0, prev - curr);
   }, 0);
   const netTankGain = Math.max(
     0,
-    Number(recordsInRange[recordsInRange.length - 1]?.tankLevelKl || 0) -
-      Number(recordsInRange[0]?.tankLevelKl || 0),
+    parseNum(recordsInRange[recordsInRange.length - 1]?.tankLevelKl) -
+      parseNum(recordsInRange[0]?.tankLevelKl),
   );
   const estimatedUsageKl = Math.max(0, tankDrops);
   const avgDailyUsageKl = estimatedUsageKl > 0 ? estimatedUsageKl / rangeDays : 0;
@@ -142,6 +166,90 @@ export function computeWaterDashboard({
     custom: 'Custom',
   };
 
+  // ── Per-vendor cost summary ────────────────────────────────────────────────
+  // Each entry rolls up every record in the current date range that belongs
+  // to one vendor:
+  //   • declaredKl   = loads × vendor.tankerCapacityKl  (what they bill)
+  //   • measuredKl   = Σ (closingMeter − openingMeter)  (what we received)
+  //   • declaredCost = declaredKl × ₹130
+  //   • measuredCost = measuredKl × ₹130
+  //   • varianceKl   = measuredKl − declaredKl          (negative = shortfall)
+  const vendorIndex = new Map();
+  for (const v of waterVendors ?? []) {
+    if (!v) continue;
+    const key = String(v.id ?? v.vehicleNo ?? v.name ?? '');
+    if (!key) continue;
+    vendorIndex.set(key, v);
+  }
+  const findVendor = (r) => {
+    if (r.tankerVendorId && vendorIndex.has(String(r.tankerVendorId)))
+      return vendorIndex.get(String(r.tankerVendorId));
+    if (r.vendorId && vendorIndex.has(String(r.vendorId)))
+      return vendorIndex.get(String(r.vendorId));
+    if (r.vehicleNo) {
+      for (const v of vendorIndex.values()) if (v.vehicleNo === r.vehicleNo) return v;
+    }
+    if (r.source) {
+      for (const v of vendorIndex.values()) if (v.name === r.source) return v;
+    }
+    return null;
+  };
+
+  const vendorAgg = new Map(); // key → {vendorName, capacityKl, loads, measuredKl}
+  for (const r of recordsInRange) {
+    if ((r.sourceType || 'tanker') !== 'tanker') continue;
+    const v = findVendor(r);
+    const key = v?.id ?? r.vehicleNo ?? r.source ?? 'unknown';
+    const name = v?.name ?? r.source ?? r.vehicleNo ?? 'Unknown vendor';
+    const capacityKl = Number(v?.tankerCapacityKl) > 0 ? Number(v.tankerCapacityKl) : 6;
+    const loads = parseNum(r.load) || 1;
+    const measuredKl = Math.max(0, parseNum(r.closingMeter) - parseNum(r.openingMeter));
+
+    if (!vendorAgg.has(key)) {
+      vendorAgg.set(key, {
+        vendorId: v?.id ?? null,
+        vendorName: name,
+        vehicleNo: v?.vehicleNo ?? r.vehicleNo ?? null,
+        capacityKl,
+        loads: 0,
+        measuredKl: 0,
+      });
+    }
+    const row = vendorAgg.get(key);
+    row.loads += loads;
+    row.measuredKl += measuredKl;
+  }
+
+  const vendorSummary = Array.from(vendorAgg.values())
+    .map((row) => {
+      const declaredKl = row.loads * row.capacityKl;
+      const measuredKl = row.measuredKl;
+      const declaredCost = Math.round(declaredKl * WATER_RATE_PER_KL);
+      const measuredCost = Math.round(measuredKl * WATER_RATE_PER_KL);
+      return {
+        ...row,
+        declaredKl,
+        measuredKl,
+        declaredCost,
+        measuredCost,
+        varianceKl: measuredKl - declaredKl,
+        varianceCost: measuredCost - declaredCost,
+      };
+    })
+    .sort((a, b) => b.declaredCost - a.declaredCost);
+
+  const vendorSummaryTotals = vendorSummary.reduce(
+    (acc, r) => {
+      acc.loads += r.loads;
+      acc.declaredKl += r.declaredKl;
+      acc.measuredKl += r.measuredKl;
+      acc.declaredCost += r.declaredCost;
+      acc.measuredCost += r.measuredCost;
+      return acc;
+    },
+    { loads: 0, declaredKl: 0, measuredKl: 0, declaredCost: 0, measuredCost: 0 },
+  );
+
   return {
     recordsInRange,
     tankerOptions,
@@ -162,5 +270,8 @@ export function computeWaterDashboard({
     statusBand,
     smartAlerts,
     periodLabel: labelByFilter[waterFilter] || 'Today',
+    vendorSummary,
+    vendorSummaryTotals,
+    waterRatePerKl: WATER_RATE_PER_KL,
   };
 }

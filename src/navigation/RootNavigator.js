@@ -21,6 +21,7 @@ import {
 import GuardDutyScreen from '../screens/security/GuardDutyScreen';
 import HkDutyScreen from '../screens/housekeeping/HkDutyScreen';
 import AdminDutyAttendanceScreen from '../screens/admin/AdminDutyAttendanceScreen';
+import ChatbotScreen from '../screens/resident/ChatbotScreen';
 
 const Stack = createStackNavigator();
 const BottomTab = createBottomTabNavigator();
@@ -137,6 +138,19 @@ function AdminBottomTabs() {
   );
 }
 
+function ResidentStack() {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="ResidentTabs" component={ResidentTabs} />
+      <Stack.Screen
+        name="Chatbot"
+        component={ChatbotScreen}
+        options={{ presentation: 'modal' }}
+      />
+    </Stack.Navigator>
+  );
+}
+
 function AdminStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -185,11 +199,11 @@ export default function RootNavigator() {
         {!user ? (
           <Stack.Screen name="Login" component={LoginScreen} />
         ) : user.role === 'resident' || user.role === 'society' ? (
-          <Stack.Screen name="ResidentRoot" component={ResidentTabs} />
+          <Stack.Screen name="ResidentRoot" component={ResidentStack} />
         ) : user.role === 'guard' || user.role === 'admin' || user.role === 'operations' ? (
           <Stack.Screen name="AdminRoot" component={AdminStack} />
         ) : (
-          <Stack.Screen name="ResidentRoot" component={ResidentTabs} />
+          <Stack.Screen name="ResidentRoot" component={ResidentStack} />
         )}
       </Stack.Navigator>
     </NavigationContainer>
