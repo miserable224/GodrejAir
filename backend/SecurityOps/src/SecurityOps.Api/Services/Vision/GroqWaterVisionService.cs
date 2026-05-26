@@ -2,14 +2,14 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
-using SecurityOps.Api.Services.Chat;
+using SecurityOps.Api.Services.Llm;
 
 namespace SecurityOps.Api.Services.Vision;
 
 /// <summary>
 /// Implementation of <see cref="ILlmWaterVisionService"/> using any
-/// OpenAI-compatible vision endpoint (Groq Llama 4 Scout/Maverick,
-/// OpenAI GPT-4o, etc.). Re-uses the OpenAI options bag.
+/// OpenAI-protocol-compatible vision endpoint (Groq Llama 4 Scout/Maverick,
+/// OpenAI GPT-4o, etc.). Re-uses the shared <see cref="LlmOptions"/>.
 /// </summary>
 public sealed class GroqWaterVisionService : ILlmWaterVisionService
 {
@@ -59,12 +59,12 @@ public sealed class GroqWaterVisionService : ILlmWaterVisionService
         + "}";
 
     private readonly HttpClient _http;
-    private readonly OpenAiOptions _opts;
+    private readonly LlmOptions _opts;
     private readonly ILogger<GroqWaterVisionService> _log;
 
     public GroqWaterVisionService(
         HttpClient http,
-        IOptions<OpenAiOptions> opts,
+        IOptions<LlmOptions> opts,
         ILogger<GroqWaterVisionService> log)
     {
         _http = http;

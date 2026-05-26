@@ -5,6 +5,7 @@ using Microsoft.OpenApi.Models;
 using SecurityOps.Api.Auth;
 using SecurityOps.Api.Middleware;
 using SecurityOps.Api.Services.Chat;
+using SecurityOps.Api.Services.Llm;
 using SecurityOps.Api.Services.Vision;
 using SecurityOps.Application;
 using SecurityOps.Infrastructure;
@@ -105,19 +106,29 @@ builder.Services.AddScoped<AuthUserSeeder>();
 builder.Services.AddScoped<AdminOtpService>();
 builder.Services.AddSingleton<IEmailSender, DevEmailSender>();
 
-// ── LLM chat service (OpenAI-compatible; falls back to rules if unset) ──
-builder.Services.Configure<OpenAiOptions>(opts =>
+// ── LLM service options (works with any OpenAI-protocol provider: Groq, OpenAI, Together, Ollama…)
+// Reads from the "Llm" config section, with "OpenAI" kept as a fallback so older
+// appsettings files still resolve. Env vars LLM_* take precedence over JSON;
+// legacy OPENAI_* env vars are also honoured so existing Render deployments
+// keep working without an env-var rename.
+builder.Services.Configure<LlmOptions>(opts =>
 {
-    var section = builder.Configuration.GetSection("OpenAI");
+    var section = builder.Configuration.GetSection("Llm");
+    if (!section.Exists())
+        section = builder.Configuration.GetSection("OpenAI");
+
     opts.ApiKey =
-        Environment.GetEnvironmentVariable("OPENAI_API_KEY")
+        Environment.GetEnvironmentVariable("LLM_API_KEY")
+        ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY")
         ?? section["ApiKey"];
     opts.BaseUrl =
-        Environment.GetEnvironmentVariable("OPENAI_BASE_URL")
+        Environment.GetEnvironmentVariable("LLM_BASE_URL")
+        ?? Environment.GetEnvironmentVariable("OPENAI_BASE_URL")
         ?? section["BaseUrl"]
         ?? "https://api.openai.com/v1";
     opts.Model =
-        Environment.GetEnvironmentVariable("OPENAI_MODEL")
+        Environment.GetEnvironmentVariable("LLM_MODEL")
+        ?? Environment.GetEnvironmentVariable("OPENAI_MODEL")
         ?? section["Model"]
         ?? "gpt-4o-mini";
     if (double.TryParse(section["Temperature"], out var temp))

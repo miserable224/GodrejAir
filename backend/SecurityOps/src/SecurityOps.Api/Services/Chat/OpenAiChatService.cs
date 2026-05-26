@@ -2,21 +2,13 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
+using SecurityOps.Api.Services.Llm;
 
 namespace SecurityOps.Api.Services.Chat;
 
-public sealed class OpenAiOptions
-{
-    public string? ApiKey { get; set; }
-    public string BaseUrl { get; set; } = "https://api.openai.com/v1";
-    public string Model { get; set; } = "gpt-4o-mini";
-    public int MaxToolHops { get; set; } = 4;
-    public double Temperature { get; set; } = 0.2;
-    public string? SystemPrompt { get; set; }
-}
-
 /// <summary>
-/// Calls any OpenAI-compatible Chat Completions endpoint with function calling.
+/// Calls any OpenAI-protocol-compatible Chat Completions endpoint with
+/// function calling. Works with Groq, OpenAI, Together, Ollama, etc.
 /// Falls back to disabled if no API key is configured (in which case
 /// <see cref="ILlmChatService.IsEnabled"/> is false and the caller should
 /// use the rule-based pipeline).
@@ -46,12 +38,12 @@ public sealed class OpenAiChatService : ILlmChatService
         + "Never dump raw JSON.";
 
     private readonly HttpClient _http;
-    private readonly OpenAiOptions _opts;
+    private readonly LlmOptions _opts;
     private readonly ILogger<OpenAiChatService> _log;
 
     public OpenAiChatService(
         HttpClient http,
-        IOptions<OpenAiOptions> opts,
+        IOptions<LlmOptions> opts,
         ILogger<OpenAiChatService> log)
     {
         _http = http;
