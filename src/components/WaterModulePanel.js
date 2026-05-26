@@ -1,8 +1,139 @@
 import React, { useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  TextInput,
+  ScrollView,
+  Image,
+  Modal,
+  Pressable,
+  Dimensions,
+} from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { SEC, SEC_FONTS } from '../constants/moduleThemes';
+
+const PHOTO_TYPE_LABEL = {
+  starting_meter: 'Starting meter',
+  ending_meter: 'Ending meter',
+  tds: 'TDS',
+  vehicle_number: 'Vehicle plate',
+  unknown: 'Photo',
+};
+
+function photoLabel(type) {
+  return PHOTO_TYPE_LABEL[(type || 'unknown').toLowerCase()] || 'Photo';
+}
+
+function PhotoViewer({ photos, index, onClose, onChangeIndex }) {
+  if (!photos || photos.length === 0) return null;
+  const safeIndex = Math.max(0, Math.min(index, photos.length - 1));
+  const current = photos[safeIndex];
+  const { width, height } = Dimensions.get('window');
+  return (
+    <Modal visible animationType="fade" transparent onRequestClose={onClose}>
+      <View style={viewerStyles.backdrop}>
+        <Pressable style={viewerStyles.closeBtn} onPress={onClose} hitSlop={12}>
+          <Ionicons name="close" size={26} color="#fff" />
+        </Pressable>
+        <View style={[viewerStyles.imageWrap, { width: width - 24, height: height * 0.65 }]}>
+          {current?.uri ? (
+            <Image source={{ uri: current.uri }} style={viewerStyles.image} resizeMode="contain" />
+          ) : (
+            <Text style={viewerStyles.missing}>No image</Text>
+          )}
+        </View>
+        <View style={viewerStyles.captionWrap}>
+          <Text style={viewerStyles.caption}>
+            {photoLabel(current?.detectedType)}
+            {current?.detectedValue ? ` · ${current.detectedValue}` : ''}
+          </Text>
+          {current?.capturedAt ? (
+            <Text style={viewerStyles.subCaption}>
+              {new Date(current.capturedAt).toLocaleString()}
+            </Text>
+          ) : null}
+          {typeof current?.lat === 'number' && typeof current?.lng === 'number' ? (
+            <Text style={viewerStyles.subCaption}>
+              {current.lat.toFixed(5)}, {current.lng.toFixed(5)}
+            </Text>
+          ) : null}
+          {photos.length > 1 ? (
+            <View style={viewerStyles.pager}>
+              <Pressable
+                onPress={() => onChangeIndex(Math.max(0, safeIndex - 1))}
+                disabled={safeIndex === 0}
+                style={[viewerStyles.pagerBtn, safeIndex === 0 && viewerStyles.pagerBtnDisabled]}
+              >
+                <Ionicons name="chevron-back" size={20} color="#fff" />
+              </Pressable>
+              <Text style={viewerStyles.pagerText}>
+                {safeIndex + 1} / {photos.length}
+              </Text>
+              <Pressable
+                onPress={() => onChangeIndex(Math.min(photos.length - 1, safeIndex + 1))}
+                disabled={safeIndex === photos.length - 1}
+                style={[
+                  viewerStyles.pagerBtn,
+                  safeIndex === photos.length - 1 && viewerStyles.pagerBtnDisabled,
+                ]}
+              >
+                <Ionicons name="chevron-forward" size={20} color="#fff" />
+              </Pressable>
+            </View>
+          ) : null}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const viewerStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.92)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+  },
+  closeBtn: {
+    position: 'absolute',
+    top: 36,
+    right: 16,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+  },
+  imageWrap: {
+    backgroundColor: '#000',
+    borderRadius: 12,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  image: { width: '100%', height: '100%' },
+  missing: { color: '#888', fontSize: 14 },
+  captionWrap: { marginTop: 14, alignItems: 'center' },
+  caption: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  subCaption: { color: '#bbb', fontSize: 12, marginTop: 4 },
+  pager: { flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 14 },
+  pagerBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pagerBtnDisabled: { opacity: 0.35 },
+  pagerText: { color: '#fff', fontSize: 13, fontWeight: '700' },
+});
 
 function tankStatusColors(band) {
   if (band === 'critical') return { accent: SEC.red, dim: SEC.redDim, border: SEC.redBorder, label: 'Critical' };
@@ -150,6 +281,295 @@ function createStyles() {
     logDate: { fontSize: 12, fontWeight: '800', color: SEC.teal },
     logVehicle: { fontSize: 11, fontWeight: '700', color: SEC.textMuted },
     logMeta: { fontSize: 10, color: SEC.textDim, lineHeight: 14 },
+    photoStripWrap: {
+      marginTop: 8,
+      paddingTop: 8,
+      borderTopWidth: 1,
+      borderTopColor: SEC.borderSubtle,
+    },
+    photoStripLabel: {
+      fontSize: 10,
+      fontWeight: '700',
+      color: SEC.textMuted,
+      marginBottom: 6,
+    },
+    photoStrip: { flexGrow: 0 },
+    photoThumbWrap: { marginRight: 8, width: 72 },
+    photoThumb: {
+      width: 72,
+      height: 72,
+      borderRadius: 8,
+      backgroundColor: SEC.bg,
+      borderWidth: 1,
+      borderColor: SEC.border,
+    },
+    photoThumbMissing: { alignItems: 'center', justifyContent: 'center' },
+    photoThumbLabel: {
+      fontSize: 9,
+      color: SEC.textMuted,
+      marginTop: 4,
+      textAlign: 'center',
+    },
+    vendorAccHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: SEC.surfaceRaised,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: SEC.border,
+      padding: 12,
+      marginTop: 12,
+    },
+    vendorAccTitle: { fontSize: 13, fontWeight: '800', color: SEC.text },
+    vendorAccSub: { fontSize: 11, color: SEC.textMuted, marginTop: 2 },
+    vendorAccBody: {
+      backgroundColor: SEC.surfaceRaised,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: SEC.border,
+      borderTopWidth: 0,
+      borderTopLeftRadius: 0,
+      borderTopRightRadius: 0,
+      padding: 10,
+      marginTop: -1,
+    },
+    vendorRate: {
+      fontSize: 10,
+      fontWeight: '700',
+      color: SEC.teal,
+      marginBottom: 8,
+    },
+    vendorHeaderRow: {
+      flexDirection: 'row',
+      paddingBottom: 6,
+      borderBottomWidth: 1,
+      borderBottomColor: SEC.borderSubtle,
+      marginBottom: 4,
+      minWidth: 520,
+    },
+    vendorRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 8,
+      borderBottomWidth: 1,
+      borderBottomColor: SEC.borderSubtle,
+      minWidth: 520,
+    },
+    vendorRowTotal: { backgroundColor: SEC.bg, borderBottomWidth: 0 },
+    vendorCellVendor: { width: 130, paddingRight: 6 },
+    vendorCellNum: { width: 78, textAlign: 'right' },
+    vendorCellMoney: { width: 78, textAlign: 'right' },
+    vendorCellHead: { fontSize: 10, fontWeight: '800', color: SEC.textMuted },
+    vendorCell: { fontSize: 11, color: SEC.text },
+    vendorCellShortfall: { color: SEC.red, fontWeight: '700' },
+    vendorName: { fontSize: 12, fontWeight: '700', color: SEC.text },
+    vendorMeta: { fontSize: 9, color: SEC.textMuted, marginTop: 2 },
+    vendorTotalLabel: { fontWeight: '800', color: SEC.text },
+    vendorLegend: {
+      fontSize: 9,
+      color: SEC.textMuted,
+      marginTop: 8,
+      lineHeight: 13,
+    },
+
+    // ── Redesigned vendor cost grid ────────────────────────────────────────
+    totalsRow: { flexDirection: 'row', gap: 10, marginTop: 12, marginBottom: 8 },
+    totalsCard: {
+      flex: 1,
+      backgroundColor: SEC.surfaceRaised,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: SEC.border,
+      paddingVertical: 12,
+      paddingHorizontal: 12,
+    },
+    totalsLabel: {
+      fontSize: 10,
+      fontWeight: '800',
+      color: SEC.textMuted,
+      letterSpacing: 0.4,
+      textTransform: 'uppercase',
+    },
+    totalsValue: {
+      fontSize: 20,
+      fontWeight: '800',
+      color: SEC.text,
+      marginTop: 4,
+    },
+    totalsSub: { fontSize: 10, color: SEC.textDim, marginTop: 2 },
+
+    varianceRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 10,
+    },
+    tariffText: { fontSize: 10, color: SEC.teal, fontWeight: '700' },
+    variancePill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 999,
+      borderWidth: 1,
+    },
+    varianceText: { fontSize: 11, fontWeight: '800' },
+
+    emptyCard: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: SEC.surfaceRaised,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: SEC.borderSubtle,
+      paddingVertical: 32,
+      paddingHorizontal: 16,
+      marginTop: 8,
+    },
+    emptyTitle: {
+      fontSize: 13,
+      fontWeight: '800',
+      color: SEC.text,
+      marginTop: 8,
+    },
+    emptySub: {
+      fontSize: 11,
+      color: SEC.textMuted,
+      marginTop: 4,
+      textAlign: 'center',
+    },
+
+    // ── Single consolidated grid ───────────────────────────────────────────
+    gridCard: {
+      backgroundColor: SEC.surfaceRaised,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: SEC.border,
+      overflow: 'hidden',
+      marginTop: 12,
+    },
+    gridHeadRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      backgroundColor: SEC.bg,
+      borderBottomWidth: 1,
+      borderBottomColor: SEC.border,
+    },
+    gridHeadCell: {
+      fontSize: 9,
+      fontWeight: '800',
+      color: SEC.textMuted,
+      letterSpacing: 0.6,
+      textTransform: 'uppercase',
+    },
+    gridHeadRight: { textAlign: 'right' },
+    gridDataRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 12,
+      paddingVertical: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: SEC.borderSubtle,
+    },
+    gridTotalRow: {
+      backgroundColor: 'rgba(20,184,166,0.06)',
+      borderBottomWidth: 2,
+      borderBottomColor: SEC.border,
+    },
+    gridSubHead: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      backgroundColor: SEC.bg,
+      borderBottomWidth: 1,
+      borderBottomColor: SEC.borderSubtle,
+    },
+    gridSubHeadText: {
+      fontSize: 9,
+      fontWeight: '800',
+      color: SEC.textMuted,
+      letterSpacing: 0.6,
+      textTransform: 'uppercase',
+    },
+    gridTariffMini: {
+      fontSize: 9,
+      fontWeight: '700',
+      color: SEC.teal,
+    },
+    gridSubHeadRight: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    refreshBtn: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: SEC.bg,
+      borderWidth: 1,
+      borderColor: SEC.borderSubtle,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    emptyRefresh: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      marginTop: 12,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: SEC.tealBorder ?? 'rgba(20,184,166,0.35)',
+      backgroundColor: SEC.tealDim ?? 'rgba(20,184,166,0.08)',
+    },
+    emptyRefreshText: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: SEC.teal,
+    },
+    gridColVendor: { flex: 2.2, paddingRight: 6 },
+    gridColNum: { flex: 1, alignItems: 'flex-end', paddingLeft: 4 },
+    gridVendorName: {
+      fontSize: 13,
+      fontWeight: '800',
+      color: SEC.text,
+    },
+    gridVendorMeta: {
+      fontSize: 10,
+      color: SEC.textMuted,
+      marginTop: 2,
+    },
+    // ₹ is the primary number in each cell now (per "i want to see the cost
+    // in the grid"). KL drops to a small caption underneath.
+    gridCostMain: {
+      fontSize: 14,
+      fontWeight: '800',
+      color: SEC.text,
+      textAlign: 'right',
+    },
+    gridKlSub: {
+      fontSize: 10,
+      fontWeight: '700',
+      color: SEC.textMuted,
+      marginTop: 2,
+      textAlign: 'right',
+    },
+    gridValueVariance: {
+      fontSize: 14,
+      fontWeight: '800',
+      textAlign: 'right',
+    },
+    gridTotalLabel: {
+      fontSize: 13,
+      fontWeight: '800',
+      color: SEC.text,
+    },
     empty: { fontSize: 12, color: SEC.textDim, paddingVertical: 8 },
   });
 }
@@ -180,9 +600,21 @@ export default function WaterModulePanel({
   onWaterTankerFilterChange,
   onRecordInput,
   onAddVendor,
+  onRefresh,
+  refreshing = false,
 }) {
   const s = useMemo(() => createStyles(), []);
-  const st = tankStatusColors(metrics.statusBand);
+  const formatInr = (n) => {
+    const v = Math.round(Number(n) || 0);
+    const sign = v < 0 ? '-' : '';
+    return `${sign}₹${Math.abs(v).toLocaleString('en-IN')}`;
+  };
+  const formatNum = (n) => Math.round(Number(n) || 0).toLocaleString('en-IN');
+  const formatKl = (n) => {
+    const v = Number(n) || 0;
+    if (Math.abs(v) >= 1000) return `${formatNum(v)} KL`;
+    return Number.isInteger(v) ? `${v} KL` : `${v.toFixed(1)} KL`;
+  };
 
   return (
     <View style={s.shell}>
@@ -193,58 +625,12 @@ export default function WaterModulePanel({
           end={{ x: 1, y: 1 }}
           style={s.header}
         >
-          <Text style={s.headerTitle}>Water management</Text>
-          <Text style={s.headerSub}>Tank levels, tanker logs & meter audit</Text>
+          <Text style={s.headerTitle}>Vendor cost summary</Text>
+          <Text style={s.headerSub}>Declared vs measured KL & cost per tanker vendor</Text>
         </LinearGradient>
 
         <View style={s.body}>
-          <View style={[s.tankCard, { borderColor: st.border }]}>
-            <View style={s.tankTop}>
-              <Text style={s.tankTitle}>Tank capacity</Text>
-              <View style={[s.tankPctPill, { backgroundColor: st.dim, borderColor: st.border }]}>
-                <Text style={[s.tankPctText, { color: st.accent }]}>
-                  {Math.round(metrics.tankFillPct)}%
-                </Text>
-              </View>
-            </View>
-            <Text style={[s.tankStatus, { color: st.accent }]}>{st.label}</Text>
-            <Text style={s.tankMeta}>
-              {metrics.latestTankLevelKl || 0} kL of {metrics.safeCapacity} kL · Shortfall{' '}
-              {metrics.tankShortfallKl} kL
-            </Text>
-            <View style={s.barTrack}>
-              <View
-                style={[
-                  s.barFill,
-                  { width: `${metrics.tankFillPct}%`, backgroundColor: st.accent },
-                ]}
-              />
-            </View>
-            <View style={s.tankRow}>
-              <View style={s.miniStat}>
-                <Text style={s.miniLabel}>Days left</Text>
-                <Text style={s.miniVal}>
-                  {metrics.daysLeftPrediction === null ? 'N/A' : `${metrics.daysLeftPrediction}d`}
-                </Text>
-              </View>
-              <View style={s.miniStat}>
-                <Text style={s.miniLabel}>Loss</Text>
-                <Text style={s.miniVal}>{metrics.unaccountedLossPct}%</Text>
-              </View>
-              <View style={s.miniStat}>
-                <Text style={s.miniLabel}>Tankers req.</Text>
-                <Text style={s.miniVal}>{metrics.tankersRequired}</Text>
-              </View>
-            </View>
-            <View style={s.alertsWrap}>
-              {metrics.smartAlerts.map((alert, idx) => (
-                <Text key={`wa-${idx}`} style={s.alertText}>
-                  • {alert}
-                </Text>
-              ))}
-            </View>
-          </View>
-
+          {/* Period selector — single row of chips. */}
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chipScroll}>
             <View style={s.chipRow}>
               {[
@@ -263,49 +649,6 @@ export default function WaterModulePanel({
               ))}
             </View>
           </ScrollView>
-
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chipScroll}>
-            <View style={s.chipRow}>
-              {[
-                { key: 'all', label: 'All water' },
-                { key: 'tanker', label: 'Tanker' },
-                { key: 'kaveri', label: 'Kaveri' },
-              ].map((f) => (
-                <Chip
-                  key={f.key}
-                  label={f.label}
-                  active={waterSourceFilter === f.key}
-                  onPress={() => {
-                    onWaterSourceFilterChange(f.key);
-                    onWaterTankerFilterChange('all');
-                  }}
-                  styles={s}
-                />
-              ))}
-            </View>
-          </ScrollView>
-
-          {waterSourceFilter === 'tanker' ? (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chipScroll}>
-              <View style={s.chipRow}>
-                <Chip
-                  label="All tankers"
-                  active={waterTankerFilter === 'all'}
-                  onPress={() => onWaterTankerFilterChange('all')}
-                  styles={s}
-                />
-                {metrics.tankerOptions.map((veh) => (
-                  <Chip
-                    key={veh}
-                    label={veh}
-                    active={waterTankerFilter === veh}
-                    onPress={() => onWaterTankerFilterChange(veh)}
-                    styles={s}
-                  />
-                ))}
-              </View>
-            </ScrollView>
-          ) : null}
 
           {waterFilter === 'custom' ? (
             <View style={s.customRow}>
@@ -326,70 +669,157 @@ export default function WaterModulePanel({
             </View>
           ) : null}
 
-          <View style={s.statsGrid}>
-            <View style={s.statBox}>
-              <Text style={s.statLabel}>Entries ({metrics.periodLabel})</Text>
-              <Text style={s.statVal}>{metrics.recordsInRange.length}</Text>
-            </View>
-            <View style={s.statBox}>
-              <Text style={s.statLabel}>Total loads</Text>
-              <Text style={s.statVal}>{metrics.totalLoads}</Text>
-            </View>
-            <View style={s.statBox}>
-              <Text style={s.statLabel}>Latest inflow</Text>
-              <Text style={s.statVal}>{metrics.latestInflow}</Text>
-            </View>
-            <View style={s.statBox}>
-              <Text style={s.statLabel}>Avg TDS</Text>
-              <Text style={s.statVal}>{metrics.avgTds || '—'}</Text>
-            </View>
-          </View>
-
-          <View style={s.auditCard}>
-            <Text style={s.auditTitle}>Start vs end meter audit</Text>
-            <Text style={s.auditLine}>Opening meter: {metrics.periodStartMeter || '—'}</Text>
-            <Text style={s.auditLine}>Closing meter: {metrics.periodEndMeter || '—'}</Text>
-            <Text style={s.auditLine}>Net movement: {metrics.netDelta || '—'}</Text>
-          </View>
-
-          <View style={s.hubRow}>
-            <TouchableOpacity style={[s.hubBtn, s.hubPrimary]} onPress={onRecordInput} activeOpacity={0.85}>
-              <Ionicons name="water-outline" size={16} color={SEC.bg} />
-              <Text style={s.hubTextPrimary}>Record input</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[s.hubBtn, s.hubSecondary]} onPress={onAddVendor} activeOpacity={0.85}>
-              <Ionicons name="business-outline" size={16} color={SEC.teal} />
-              <Text style={s.hubText}>Add vendor</Text>
-            </TouchableOpacity>
-          </View>
-
-          <Text style={s.hint}>
-            Log tanker entries with meter photos. Track opening vs closing readings to catch mismatch.
-          </Text>
-
-          <Text style={s.sectionHead}>Filtered inputs</Text>
-          {metrics.recordsInRange.length === 0 ? (
-            <Text style={s.empty}>No records for selected range.</Text>
-          ) : (
-            metrics.recordsInRange
-              .slice()
-              .reverse()
-              .map((r) => (
-                <View key={r.id} style={s.logCard}>
-                  <View style={s.logTop}>
-                    <Text style={s.logDate}>{r.date}</Text>
-                    <Text style={s.logVehicle}>{r.vehicleNo || 'Kaveri'}</Text>
-                  </View>
-                  <Text style={s.logMeta}>{r.source}</Text>
-                  <Text style={s.logMeta}>
-                    Meter {r.openingMeter} → {r.closingMeter} · TDS {r.tds} · Load {r.load}
-                    {r.tankLevelKl ? ` · Tank ${r.tankLevelKl} kL` : ''}
+          {/* Single consolidated vendor cost grid with totals inside */}
+          {(metrics.vendorSummary?.length ?? 0) === 0 ? (
+            <View style={s.emptyCard}>
+              <Ionicons name="cube-outline" size={28} color={SEC.textMuted} />
+              <Text style={s.emptyTitle}>No vendor data yet</Text>
+              <Text style={s.emptySub}>
+                Record a tanker entry to start tracking declared vs measured costs.
+              </Text>
+              {onRefresh ? (
+                <TouchableOpacity
+                  onPress={onRefresh}
+                  style={s.emptyRefresh}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons
+                    name={refreshing ? 'sync' : 'refresh-outline'}
+                    size={14}
+                    color={SEC.teal}
+                  />
+                  <Text style={s.emptyRefreshText}>
+                    {refreshing ? 'Refreshing…' : 'Refresh'}
                   </Text>
-                  {r.photos?.length ? (
-                    <Text style={s.logMeta}>Photos: {r.photos.length}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : (
+            <View style={s.gridCard}>
+              {/* Column header row — labels align with the numeric cells below. */}
+              <View style={s.gridHeadRow}>
+                <View style={s.gridColVendor}>
+                  <Text style={s.gridHeadCell}>Vendor</Text>
+                </View>
+                <View style={s.gridColNum}>
+                  <Text style={[s.gridHeadCell, s.gridHeadRight]}>Declared ₹</Text>
+                </View>
+                <View style={s.gridColNum}>
+                  <Text style={[s.gridHeadCell, s.gridHeadRight]}>Estimated ₹</Text>
+                </View>
+                <View style={s.gridColNum}>
+                  <Text style={[s.gridHeadCell, s.gridHeadRight]}>Variance ₹</Text>
+                </View>
+              </View>
+
+              {/* Totals row — now lives inside the grid, on the same columns. */}
+              {(() => {
+                const t = metrics.vendorSummaryTotals;
+                const dv = t.measuredKl - t.declaredKl;
+                const dc = t.measuredCost - t.declaredCost;
+                const isShort = dv < -0.001;
+                const tone = isShort ? SEC.red : SEC.green;
+                return (
+                  <View style={[s.gridDataRow, s.gridTotalRow]}>
+                    <View style={s.gridColVendor}>
+                      <Text style={s.gridTotalLabel}>Total</Text>
+                      <Text style={s.gridVendorMeta} numberOfLines={1}>
+                        {metrics.vendorSummary.length} vendor
+                        {metrics.vendorSummary.length === 1 ? '' : 's'} ·{' '}
+                        {t.loads} load{t.loads === 1 ? '' : 's'}
+                      </Text>
+                    </View>
+                    <View style={s.gridColNum}>
+                      <Text style={[s.gridCostMain, s.gridTotalLabel]}>
+                        {formatInr(t.declaredCost)}
+                      </Text>
+                      <Text style={s.gridKlSub}>{formatKl(t.declaredKl)}</Text>
+                    </View>
+                    <View style={s.gridColNum}>
+                      <Text style={[s.gridCostMain, s.gridTotalLabel]}>
+                        {formatInr(t.measuredCost)}
+                      </Text>
+                      <Text style={s.gridKlSub}>{formatKl(t.measuredKl)}</Text>
+                    </View>
+                    <View style={s.gridColNum}>
+                      <Text style={[s.gridValueVariance, s.gridTotalLabel, { color: tone }]}>
+                        {dc >= 0 ? '+' : ''}{formatInr(dc)}
+                      </Text>
+                    </View>
+                  </View>
+                );
+              })()}
+
+              {/* Sub-header for per-vendor breakdown */}
+              <View style={s.gridSubHead}>
+                <Text style={s.gridSubHeadText}>By vendor</Text>
+                <View style={s.gridSubHeadRight}>
+                  <Text style={s.gridTariffMini}>
+                    Tariff ₹{metrics.waterRatePerKl ?? 130}/KL
+                  </Text>
+                  {onRefresh ? (
+                    <TouchableOpacity
+                      onPress={onRefresh}
+                      hitSlop={10}
+                      style={s.refreshBtn}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons
+                        name={refreshing ? 'sync' : 'refresh-outline'}
+                        size={14}
+                        color={refreshing ? SEC.textMuted : SEC.teal}
+                      />
+                    </TouchableOpacity>
                   ) : null}
                 </View>
-              ))
+              </View>
+
+              {metrics.vendorSummary.map((row, idx) => {
+                const shortfall = row.varianceKl < -0.001;
+                const isLast = idx === metrics.vendorSummary.length - 1;
+                return (
+                  <View
+                    key={row.vendorId ?? row.vendorName}
+                    style={[s.gridDataRow, isLast && { borderBottomWidth: 0 }]}
+                  >
+                    <View style={s.gridColVendor}>
+                      <Text style={s.gridVendorName} numberOfLines={1}>
+                        {row.vendorName}
+                      </Text>
+                      <Text style={s.gridVendorMeta} numberOfLines={1}>
+                        {row.vehicleNo || '—'} · {row.loads} load
+                        {row.loads === 1 ? '' : 's'} · {formatKl(row.capacityKl)}/load
+                      </Text>
+                    </View>
+
+                    <View style={s.gridColNum}>
+                      <Text style={s.gridCostMain}>{formatInr(row.declaredCost)}</Text>
+                      <Text style={s.gridKlSub}>{formatKl(row.declaredKl)}</Text>
+                    </View>
+
+                    <View style={s.gridColNum}>
+                      <Text style={[s.gridCostMain, shortfall && { color: SEC.red }]}>
+                        {formatInr(row.measuredCost)}
+                      </Text>
+                      <Text style={[s.gridKlSub, shortfall && { color: SEC.red }]}>
+                        {formatKl(row.measuredKl)}
+                      </Text>
+                    </View>
+
+                    <View style={s.gridColNum}>
+                      <Text
+                        style={[
+                          s.gridValueVariance,
+                          { color: shortfall ? SEC.red : SEC.green },
+                        ]}
+                      >
+                        {row.varianceCost >= 0 ? '+' : ''}{formatInr(row.varianceCost)}
+                      </Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
           )}
         </View>
       </View>

@@ -4,6 +4,8 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using SecurityOps.Api.Auth;
 using SecurityOps.Api.Middleware;
+using SecurityOps.Api.Services.Chat;
+using SecurityOps.Api.Services.Vision;
 using SecurityOps.Application;
 using SecurityOps.Infrastructure;
 using SecurityOps.Infrastructure.Persistence;
@@ -65,6 +67,11 @@ builder.Services.AddSwaggerGen(c =>
             || path.StartsWith("api/vendors", StringComparison.OrdinalIgnoreCase)
             || path.StartsWith("api/upload-receipt", StringComparison.OrdinalIgnoreCase))
             return new[] { "Promotions" };
+        if (path.StartsWith("api/chat", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith("api/community", StringComparison.OrdinalIgnoreCase))
+            return new[] { "Community" };
+        if (path.StartsWith("api/water", StringComparison.OrdinalIgnoreCase))
+            return new[] { "Water" };
         return new[] { "Shared" };
     });
     c.DocInclusionPredicate((_, _) => true);
@@ -97,6 +104,39 @@ builder.Services.AddSingleton<JwtTokenService>();
 builder.Services.AddScoped<AuthUserSeeder>();
 builder.Services.AddScoped<AdminOtpService>();
 builder.Services.AddSingleton<IEmailSender, DevEmailSender>();
+
+// ── LLM chat service (OpenAI-compatible; falls back to rules if unset) ──
+builder.Services.Configure<OpenAiOptions>(opts =>
+{
+    var section = builder.Configuration.GetSection("OpenAI");
+    opts.ApiKey =
+        Environment.GetEnvironmentVariable("OPENAI_API_KEY")
+        ?? section["ApiKey"];
+    opts.BaseUrl =
+        Environment.GetEnvironmentVariable("OPENAI_BASE_URL")
+        ?? section["BaseUrl"]
+        ?? "https://api.openai.com/v1";
+    opts.Model =
+        Environment.GetEnvironmentVariable("OPENAI_MODEL")
+        ?? section["Model"]
+        ?? "gpt-4o-mini";
+    if (double.TryParse(section["Temperature"], out var temp))
+        opts.Temperature = temp;
+    if (int.TryParse(section["MaxToolHops"], out var hops) && hops > 0)
+        opts.MaxToolHops = hops;
+    opts.SystemPrompt = section["SystemPrompt"];
+});
+builder.Services.AddHttpClient<ILlmChatService, OpenAiChatService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+
+// Vision-capable multimodal LLM (re-uses the same OpenAI-compatible base URL,
+// but needs a longer timeout because base64 payloads + image reasoning are slow).
+builder.Services.AddHttpClient<ILlmWaterVisionService, GroqWaterVisionService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(60);
+});
 
 var app = builder.Build();
 

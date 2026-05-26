@@ -2,6 +2,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage;
 using SecurityOps.Domain.Entities;
+using SecurityOps.Domain.Entities.Community;
+using SecurityOps.Domain.Entities.Water;
 
 namespace SecurityOps.Application.Common.Interfaces;
 
@@ -43,6 +45,22 @@ public interface IApplicationDbContext : IUnitOfWork
     DbSet<BoardMember> BoardMembers { get; }
     DbSet<PromotionPayment> PromotionPayments { get; }
     DbSet<PromotionDocument> PromotionDocuments { get; }
+
+    DbSet<EventItem> Events { get; }
+    DbSet<ClassDef> Classes { get; }
+    DbSet<ClassSchedule> ClassSchedules { get; }
+    DbSet<SocietyVendor> SocietyVendors { get; }
+
+    // Chatbot memory + RAG
+    DbSet<ChatSession> ChatSessions { get; }
+    DbSet<ChatMessage> ChatMessages { get; }
+    DbSet<ResidentFact> ResidentFacts { get; }
+    DbSet<SocietyDoc> SocietyDocs { get; }
+
+    // Water tanker module
+    DbSet<WaterVendor> WaterVendors { get; }
+    DbSet<WaterRecord> WaterRecords { get; }
+    DbSet<WaterRecordPhoto> WaterRecordPhotos { get; }
 
     DatabaseFacade Database { get; }
 }

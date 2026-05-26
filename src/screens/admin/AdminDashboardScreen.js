@@ -84,6 +84,21 @@ import {
   pickGeoPhotoFromLibrary,
 } from '../../utils/geoPhoto';
 import { WaterRecordForm, WaterVendorForm } from '../../components/WaterRecordForm';
+import { analyzeWaterPhotoWithVisionAPI, uriToBase64 } from '../../services/googleVisionService';
+import { analyzeWaterPhotoWithLLM } from '../../services/llmWaterVisionService';
+import {
+  createWaterRecord,
+  fetchWaterRecords,
+  fetchWaterVendors,
+} from '../../services/waterRecordService';
+import { MAX_WATER_SCAN_PHOTOS } from '../../constants/waterPhotoTypes';
+import {
+  applyWaterOcrToForm,
+  clearFieldFromRemovedPhoto,
+  computeWaterLoad,
+  createEmptyWaterForm,
+  isWaterFormReadyToSubmit,
+} from '../../utils/waterFormHelpers';
 import { HK, WATER } from '../../constants/moduleThemes';
 import { ensureValidAccessToken } from '../../modules/shared';
 import {
@@ -398,6 +413,14 @@ function applyCategoryRatios(counts, fmRatio, secRatio) {
     };
   });
 }
+
+const getTodayDMY = () => {
+  const d = new Date();
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = String(d.getFullYear() % 100).padStart(2, '0');
+  return `${day}/${month}/${year}`;
+};
 
 const DASHBOARD_SECTIONS = [...OPERATIONS_SECTIONS, ...ENGAGEMENT_SECTIONS];
 const CONTENT_PAD = 16;
@@ -845,6 +868,19 @@ export default function AdminDashboardScreen({ navigation, route }) {
   const [recentPayments, setRecentPayments] = useState([]);
   const [waterRecords, setWaterRecords] = useState([
     {
+      id: 'water-002',
+      date: '24/05/26',
+      source: 'Bwssb water tanker',
+      sourceType: 'tanker',
+      vehicleNo: 'KA19AC4789',
+      openingMeter: '076522,7',
+      closingMeter: '076534,8',
+      tds: '547',
+      load: '06',
+      tankLevelKl: '85',
+      photos: [],
+    },
+    {
       id: 'water-001',
       date: '06/05/26',
       source: 'SwS water tanker',
@@ -865,22 +901,86 @@ export default function AdminDashboardScreen({ navigation, route }) {
       contactNumber: '9876543210',
       address: 'KR Puram, Bengaluru',
       vehicleNo: 'KA53JR1035',
+      tankerCapacityKl: 12,
+    },
+    {
+      id: 'v-002',
+      name: 'Bwssb water tanker',
+      contactNumber: '9123456789',
+      address: 'Indiranagar, Bengaluru',
+      vehicleNo: 'KA19AC4789',
+      tankerCapacityKl: 9,
     },
   ]);
-  const [waterForm, setWaterForm] = useState({
-    date: '06/05/26',
-    source: 'SwS water tanker',
-    sourceType: 'tanker',
-    tankerVendorId: 'v-001',
-    vehicleNo: '',
-    openingMeter: '',
-    closingMeter: '',
-    tds: '',
-    load: '',
-    tankLevelKl: '',
-    photos: [],
-  });
-  const [tankCapacityKl] = useState(120);
+  const [waterForm, setWaterForm] = useState(() => createEmptyWaterForm());
+  // Society reservoir. 1 m³ = 1 KL, so "767,615 m³" is stored as 767,615 KL.
+  const [tankCapacityKl] = useState(1_000_000);
+  const [tankBaselineKl] = useState(767_615);
+
+  // The metrics util (waterMetrics.js) parses `r.date` as DD/MM/YY, but the
+  // backend returns ISO `yyyy-MM-dd`. Convert here so the records actually
+  // land inside the "Today / Week / Month" range filters.
+  const isoDateToDmy = (iso) => {
+    if (!iso || typeof iso !== 'string') return iso;
+    const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!m) return iso;
+    return `${m[3]}/${m[2]}/${m[1].slice(2)}`;
+  };
+
+  // Pulls the latest tanker records (with persisted photos) from the API and
+  // replaces the local seed list. Used:
+  //   • once on mount
+  //   • every time the Water section is expanded
+  //   • when the user taps the refresh icon in the grid
+  // If the call fails (offline / no backend) the existing rows stay so the
+  // UI doesn't go blank.
+  const [waterRecordsLoading, setWaterRecordsLoading] = useState(false);
+  const loadWaterRecords = useCallback(async () => {
+    setWaterRecordsLoading(true);
+    try {
+      const remote = await fetchWaterRecords({ days: 90, limit: 200 });
+      if (!Array.isArray(remote)) return;
+      const mapped = remote.map((r) => ({
+        id: r.id,
+        date: isoDateToDmy(r.date),
+        time: r.time,
+        source: r.source ?? '',
+        sourceType: r.sourceType ?? 'tanker',
+        vehicleNo: r.vehicleNo ?? '',
+        openingMeter: r.openingMeter ?? '',
+        closingMeter: r.closingMeter ?? '',
+        tds: r.tds ?? '',
+        load: r.load ?? '',
+        tankLevelKl: r.tankLevelKl ?? '',
+        photos: Array.isArray(r.photos)
+          ? r.photos.map((p) => ({
+              id: p.id,
+              uri: p.url,
+              detectedType: p.photoType,
+              detectedValue: p.detectedValue,
+              scanConfidence: p.scanConfidence,
+              capturedAt: p.capturedAt,
+              lat: p.latitude,
+              lng: p.longitude,
+              remote: true,
+            }))
+          : [],
+        synced: true,
+      }));
+      // Always replace when we get a successful response — even if empty — so
+      // a vendor that's been removed from the DB doesn't linger in the UI.
+      setWaterRecords(mapped);
+    } catch (err) {
+      console.warn('[water] failed to load records from API', err?.message);
+    } finally {
+      setWaterRecordsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadWaterRecords();
+  }, [loadWaterRecords]);
+
   const [waterFilter, setWaterFilter] = useState('today');
   const [waterCustomFrom, setWaterCustomFrom] = useState('');
   const [waterCustomTo, setWaterCustomTo] = useState('');
@@ -984,7 +1084,13 @@ export default function AdminDashboardScreen({ navigation, route }) {
       setHkDutyGridOpen(false);
       setHkDeploymentOpen(false);
     }
-  }, [expandedId]);
+    // Whenever the user opens the Water section, pull the freshest records
+    // from the API. Without this, rows added via Supabase Studio or another
+    // device wouldn't appear until the app is fully restarted.
+    if (expandedId === 'WaterTracking') {
+      loadWaterRecords();
+    }
+  }, [expandedId, loadWaterRecords]);
 
   const [staffAttendancePhoto, setStaffAttendancePhoto] = useState(null);
   const [deploymentForm, setDeploymentForm] = useState({
@@ -1146,6 +1252,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
         waterSourceFilter,
         waterTankerFilter,
         tankCapacityKl,
+        tankBaselineKl,
+        waterVendors,
       }),
     [
       waterRecords,
@@ -1155,6 +1263,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
       waterSourceFilter,
       waterTankerFilter,
       tankCapacityKl,
+      tankBaselineKl,
+      waterVendors,
     ],
   );
 
@@ -1362,53 +1472,310 @@ export default function AdminDashboardScreen({ navigation, route }) {
     setRecordPaymentOpen(false);
   };
 
-  const pickWaterPhotos = async () => {
-    const result = await DocumentPicker.getDocumentAsync({
-      type: ['image/*'],
-      multiple: true,
-      copyToCacheDirectory: true,
-    });
-    if (!result.canceled && result.assets?.length) {
-      setWaterForm((prev) => ({
-        ...prev,
-        photos: [...prev.photos, ...result.assets.map((a) => a.name || 'photo')],
-      }));
+  const openWaterRecordForm = async () => {
+    setWaterForm(createEmptyWaterForm());
+    setRecordWaterOpen(true);
+    // Pull live vendor list from the API so the picker shows real DB UUIDs
+    // (the locally-seeded `v-001` placeholders won't satisfy the FK on POST).
+    try {
+      const apiVendors = await fetchWaterVendors();
+      if (Array.isArray(apiVendors) && apiVendors.length > 0) {
+        setWaterVendors(apiVendors);
+      }
+    } catch (err) {
+      console.warn('[openWaterRecordForm] vendors fetch failed', err?.message);
+      // Keep the locally-seeded list so the user can still open the form;
+      // saveWaterInput will fall back to vendorId=null when the picked id
+      // is not a UUID.
     }
   };
 
-  const saveWaterInput = () => {
-    if (!waterForm.date.trim()) return;
-    if (waterForm.sourceType === 'tanker' && !waterForm.vehicleNo.trim()) return;
-    setWaterRecords((cur) => [
-      {
-        id: `water-${Date.now()}`,
-        date: waterForm.date.trim(),
-        source: waterForm.source.trim() || (waterForm.sourceType === 'kaveri' ? 'Kaveri water' : 'Tanker'),
-        sourceType: waterForm.sourceType || 'tanker',
-        vehicleNo: waterForm.vehicleNo.trim(),
-        openingMeter: waterForm.openingMeter.trim() || '0',
-        closingMeter: waterForm.closingMeter.trim() || '0',
-        tds: waterForm.tds.trim() || '-',
-        load: waterForm.load.trim() || '1',
-        tankLevelKl: waterForm.tankLevelKl.trim() || '',
-        photos: waterForm.photos,
-      },
-      ...cur,
-    ]);
-    setWaterForm({
-      date: '',
-      source: 'SwS water tanker',
-      sourceType: 'tanker',
-      tankerVendorId: waterVendors[0]?.id || '',
-      vehicleNo: '',
-      openingMeter: '',
-      closingMeter: '',
-      tds: '',
-      load: '',
-      tankLevelKl: '',
-      photos: [],
+  const captureWaterPhoto = async () => {
+    if (!waterForm.tankerVendorId) {
+      Alert.alert('Vendor required', 'Select a tanker vendor before taking photos.');
+      return;
+    }
+    if ((waterForm.photos?.length ?? 0) >= MAX_WATER_SCAN_PHOTOS) {
+      Alert.alert('Photo limit', `You can capture up to ${MAX_WATER_SCAN_PHOTOS} photos per entry.`);
+      return;
+    }
+
+    try {
+      const geoPhoto = await pickGeoPhotoFromCamera();
+      if (!geoPhoto?.uri) return;
+
+      const photoId = `water-ph-${Date.now()}`;
+      const captureIndex = waterForm.photos?.length ?? 0;
+      const filledFields = {
+        opening: Boolean(waterForm.openingMeter?.trim()),
+        closing: Boolean(waterForm.closingMeter?.trim()),
+        tds: Boolean(waterForm.tds?.trim()),
+        vehicle: Boolean(waterForm.vehicleNo?.trim()),
+      };
+
+      setWaterForm((prev) => ({
+        ...prev,
+        userValidated: false,
+        photos: [
+          ...(prev.photos ?? []),
+          {
+            id: photoId,
+            ...geoPhoto,
+            scanStatus: 'scanning',
+            detectedType: null,
+            detectedValue: null,
+          },
+        ],
+      }));
+
+      // Primary: route through the LLM (multimodal Llama 4 Scout via Groq).
+      // Google Vision OCR is only tried if it is explicitly configured (real API
+      // key in EXPO_PUBLIC_GOOGLE_VISION_API_KEY) — we never fall through to a
+      // hard-coded demo response, because that was silently auto-populating
+      // fake values like "KA53JR1035" / "245".
+      let result = null;
+      let usedLlm = true;
+      try {
+        result = await analyzeWaterPhotoWithLLM(geoPhoto.uri, captureIndex, filledFields);
+      } catch (llmErr) {
+        console.warn('[captureWaterPhoto LLM failed]', llmErr);
+        result = null;
+      }
+
+      if (!result?.detectedType) {
+        // LLM didn't identify the photo. Try real OCR only if it's configured;
+        // otherwise leave the field empty and let the user type manually.
+        usedLlm = false;
+        try {
+          result = await analyzeWaterPhotoWithVisionAPI(geoPhoto.uri, captureIndex, filledFields);
+        } catch (ocrErr) {
+          console.warn('[captureWaterPhoto OCR unavailable]', ocrErr?.message);
+          setWaterForm((prev) => ({
+            ...prev,
+            photos: (prev.photos ?? []).map((p) =>
+              p.id === photoId
+                ? { ...p, scanStatus: 'failed', detectedType: null, detectedValue: null }
+                : p,
+            ),
+          }));
+          Alert.alert(
+            'Could not read this photo',
+            'The scanner could not identify the meter / TDS / plate. Please retake the photo more closely, or type the value into the field below.',
+          );
+          return;
+        }
+      }
+
+      // Apply low-confidence policy: if the LLM is < 60% sure, still attach the
+      // raw value to the photo card (so the user sees what was guessed) but do
+      // NOT auto-populate the form field. The user must verify manually.
+      const lowConfidence =
+        typeof result.confidence === 'number' && result.confidence < 0.6;
+
+      setWaterForm((prev) => {
+        const photos = (prev.photos ?? []).map((p) =>
+          p.id === photoId
+            ? {
+                ...p,
+                scanStatus: 'done',
+                detectedType: result.detectedType,
+                detectedValue: result.detectedValue ?? null,
+                rawText: result.rawText ?? '',
+                scanSource: usedLlm ? 'llm' : 'ocr',
+                scanConfidence: result.confidence ?? null,
+                lowConfidence,
+              }
+            : p,
+        );
+        if (lowConfidence) {
+          // Keep form fields untouched — only the photo card shows the guess.
+          return { ...prev, photos, userValidated: false };
+        }
+        return applyWaterOcrToForm({ ...prev, photos }, result);
+      });
+
+      if (lowConfidence) {
+        Alert.alert(
+          'Low confidence reading',
+          `Auto-read returned "${result.detectedValue ?? '—'}" (${Math.round(
+            (result.confidence ?? 0) * 100,
+          )}% confident). Please verify and type the correct value into the field below, or tap Rescan.`,
+        );
+      }
+    } catch (err) {
+      console.log('Error taking water photo:', err);
+      Alert.alert('Camera', err?.message || 'Could not use camera.');
+    }
+  };
+
+  // Re-run scanning on an existing photo (no re-capture). Useful when the LLM
+  // misread a meter or TDS value the first time.
+  const rescanWaterPhoto = async (photoId) => {
+    const photo = (waterForm.photos ?? []).find((p) => p.id === photoId);
+    if (!photo?.uri) return;
+
+    setWaterForm((prev) => ({
+      ...prev,
+      photos: (prev.photos ?? []).map((p) =>
+        p.id === photoId ? { ...p, scanStatus: 'scanning' } : p,
+      ),
+    }));
+
+    const filledFields = {
+      opening: Boolean(waterForm.openingMeter?.trim()),
+      closing: Boolean(waterForm.closingMeter?.trim()),
+      tds: Boolean(waterForm.tds?.trim()),
+      vehicle: Boolean(waterForm.vehicleNo?.trim()),
+    };
+
+    try {
+      const result = await analyzeWaterPhotoWithLLM(photo.uri, 0, filledFields);
+      const lowConfidence =
+        typeof result.confidence === 'number' && result.confidence < 0.6;
+
+      setWaterForm((prev) => {
+        const photos = (prev.photos ?? []).map((p) =>
+          p.id === photoId
+            ? {
+                ...p,
+                scanStatus: 'done',
+                detectedType: result.detectedType,
+                detectedValue: result.detectedValue ?? null,
+                rawText: result.rawText ?? '',
+                scanSource: 'llm',
+                scanConfidence: result.confidence ?? null,
+                lowConfidence,
+              }
+            : p,
+        );
+        if (lowConfidence) return { ...prev, photos, userValidated: false };
+        return applyWaterOcrToForm({ ...prev, photos }, result);
+      });
+    } catch (err) {
+      console.warn('[rescanWaterPhoto]', err);
+      setWaterForm((prev) => ({
+        ...prev,
+        photos: (prev.photos ?? []).map((p) =>
+          p.id === photoId ? { ...p, scanStatus: 'failed' } : p,
+        ),
+      }));
+      Alert.alert('Rescan failed', err?.message || 'Could not re-read this photo.');
+    }
+  };
+
+  const removeWaterPhoto = (photoId) => {
+    setWaterForm((prev) => {
+      const photo = (prev.photos ?? []).find((p) => p.id === photoId);
+      const photos = (prev.photos ?? []).filter((p) => p.id !== photoId);
+      let next = { ...prev, photos, userValidated: false };
+      if (photo) next = clearFieldFromRemovedPhoto(next, photo);
+      return next;
     });
-    setRecordWaterOpen(false);
+  };
+
+  const saveWaterInput = async () => {
+    if (!isWaterFormReadyToSubmit(waterForm)) {
+      Alert.alert(
+        'Incomplete entry',
+        'Select vendor, capture 4 scanned photos, fill all readings, and confirm before submitting.',
+      );
+      return;
+    }
+
+    const computedLoad = computeWaterLoad(waterForm.openingMeter, waterForm.closingMeter) || '1';
+    const vendorId = waterForm.tankerVendorId || null;
+    // Only forward UUID-style vendor IDs to the API; locally-generated `v-001`,
+    // `v-${Date.now()}` placeholders (from the legacy seed data) would fail the
+    // FK lookup and we'd lose the row.
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const apiVendorId = vendorId && uuidRe.test(vendorId) ? vendorId : null;
+
+    // Convert each captured photo's local URI to base64 so the backend can
+    // persist it to wwwroot/uploads/water/... and store the URL + metadata
+    // in water_record_photos.
+    const photoUploads = [];
+    for (const p of waterForm.photos ?? []) {
+      try {
+        const base64 = await uriToBase64(p.uri);
+        photoUploads.push({
+          base64,
+          mimeType: 'image/jpeg',
+          photoType: p.detectedType || 'unknown',
+          detectedValue: p.detectedValue ?? null,
+          scanConfidence: typeof p.scanConfidence === 'number' ? p.scanConfidence : null,
+          latitude: typeof p.lat === 'number' ? p.lat : typeof p.latitude === 'number' ? p.latitude : null,
+          longitude: typeof p.lng === 'number' ? p.lng : typeof p.longitude === 'number' ? p.longitude : null,
+          capturedAt: p.capturedAt || null,
+        });
+      } catch (e) {
+        console.warn('[saveWaterInput] failed to encode photo, skipping', e?.message);
+      }
+    }
+
+    try {
+      const saved = await createWaterRecord({
+        date: waterForm.date.trim(),
+        time: waterForm.time.trim(),
+        source: waterForm.source.trim() || 'Tanker',
+        sourceType: 'tanker',
+        vehicleNo: waterForm.vehicleNo.trim(),
+        openingMeter: waterForm.openingMeter.trim(),
+        closingMeter: waterForm.closingMeter.trim(),
+        tds: waterForm.tds.trim(),
+        load: computedLoad,
+        vendorId: apiVendorId,
+        notes: `time=${waterForm.time.trim()}; photos=${photoUploads.length}`,
+        photos: photoUploads,
+      });
+
+      // Prepend the server-confirmed record (UUID, server timestamp) into the
+      // local feed so the user sees their entry immediately. We keep the local
+      // photo array because it's not persisted on the server yet.
+      setWaterRecords((cur) => [
+        {
+          id: saved?.id ?? `water-${Date.now()}`,
+          date: saved?.date ? isoDateToDmy(saved.date) : waterForm.date.trim(),
+          time: saved?.time ?? waterForm.time.trim(),
+          source: saved?.source ?? waterForm.source.trim() ?? 'Tanker',
+          sourceType: saved?.sourceType ?? 'tanker',
+          vehicleNo: saved?.vehicleNo ?? waterForm.vehicleNo.trim(),
+          openingMeter: saved?.openingMeter ?? waterForm.openingMeter.trim(),
+          closingMeter: saved?.closingMeter ?? waterForm.closingMeter.trim(),
+          tds: saved?.tds ?? waterForm.tds.trim(),
+          load: saved?.load ?? computedLoad,
+          tankLevelKl: '',
+          userValidated: true,
+          // Prefer the server-side photo URLs (now persisted) so they survive
+          // reloads. Fall back to the local URIs if the server didn't return
+          // the photos array (e.g. legacy controller version).
+          photos: Array.isArray(saved?.photos) && saved.photos.length > 0
+            ? saved.photos.map((sp) => ({
+                id: sp.id,
+                uri: sp.url,
+                detectedType: sp.photoType,
+                detectedValue: sp.detectedValue,
+                scanStatus: 'done',
+                scanConfidence: sp.scanConfidence,
+                capturedAt: sp.capturedAt,
+                lat: sp.latitude,
+                lng: sp.longitude,
+                remote: true,
+              }))
+            : waterForm.photos,
+          synced: true,
+        },
+        ...cur,
+      ]);
+      setWaterForm(createEmptyWaterForm());
+      setRecordWaterOpen(false);
+      Alert.alert('Saved', 'Water entry persisted to the database.');
+    } catch (err) {
+      console.error('[saveWaterInput] API failed', err);
+      Alert.alert(
+        'Save failed',
+        err?.message || 'Could not save to the server. Please try again.',
+      );
+    }
   };
 
   const saveWaterVendor = () => {
@@ -1668,8 +2035,10 @@ export default function AdminDashboardScreen({ navigation, route }) {
       onWaterSourceFilterChange={setWaterSourceFilter}
       waterTankerFilter={waterTankerFilter}
       onWaterTankerFilterChange={setWaterTankerFilter}
-      onRecordInput={() => setRecordWaterOpen(true)}
+      onRecordInput={openWaterRecordForm}
       onAddVendor={() => setWaterVendorOpen(true)}
+      onRefresh={loadWaterRecords}
+      refreshing={waterRecordsLoading}
     />
   );
 
@@ -1838,6 +2207,62 @@ export default function AdminDashboardScreen({ navigation, route }) {
       () => openSecurityDutyModal('check-in'),
       () => openSecurityDutyModal('check-out'),
     );
+
+  const renderWaterCollapsedSummary = () => {
+    const fillPct = Math.round(waterMetrics.tankFillPct);
+    const band = waterMetrics.statusBand;
+    const accent =
+      band === 'critical' ? SEC.red : band === 'warning' ? SEC.gold : SEC.green;
+    const dim =
+      band === 'critical' ? SEC.redDim : band === 'warning' ? SEC.goldDim : SEC.greenDim;
+    const border =
+      band === 'critical' ? SEC.redBorder : band === 'warning' ? SEC.goldBorder : SEC.greenBorder;
+    const fmt = (n) => Math.round(Number(n) || 0).toLocaleString('en-IN');
+    return (
+      <View style={styles.securityCollapsedSummary}>
+        <View style={styles.waterCollapsedTankWrap}>
+          <View style={styles.waterCollapsedTankTop}>
+            <Text style={styles.waterCollapsedTankTitle}>Tank capacity</Text>
+            <View style={[styles.waterCollapsedTankPill, { backgroundColor: dim, borderColor: border }]}>
+              <Text style={[styles.waterCollapsedTankPillText, { color: accent }]}>
+                {fillPct}%
+              </Text>
+            </View>
+          </View>
+          <Text style={styles.waterCollapsedTankMeta}>
+            {fmt(waterMetrics.latestTankLevelKl)} kL of {fmt(waterMetrics.safeCapacity)} kL
+          </Text>
+          <View style={styles.waterCollapsedBarTrack}>
+            <View
+              style={[
+                styles.waterCollapsedBarFill,
+                { width: `${fillPct}%`, backgroundColor: accent },
+              ]}
+            />
+          </View>
+        </View>
+
+        <View style={[styles.hubActionRow, styles.hubActionRowCollapsed]}>
+          <TouchableOpacity
+            style={[styles.hubBtn, styles.hubBtnWaterPrimary]}
+            onPress={openWaterRecordForm}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="water-outline" size={16} color={WATER.saveOnAccent} />
+            <Text style={styles.hubBtnWaterPrimaryText}>Record input</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.hubBtn, styles.hubBtnWaterSecondary]}
+            onPress={() => setWaterVendorOpen(true)}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="business-outline" size={16} color={WATER.accent} />
+            <Text style={[styles.hubBtnTextPatrol, { color: WATER.accent }]}>Add vendor</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
 
   const renderSecurityDetails = () => (
     <View style={styles.securityExpandedShell}>
@@ -2477,7 +2902,9 @@ export default function AdminDashboardScreen({ navigation, route }) {
                     ? renderSecurityCollapsedSummary()
                     : section.id === 'Workforce'
                       ? renderHkCollapsedSummary()
-                      : null}
+                      : section.id === 'WaterTracking'
+                        ? renderWaterCollapsedSummary()
+                        : null}
               </FloatingModuleCard>
             );
           })}
@@ -2543,8 +2970,11 @@ export default function AdminDashboardScreen({ navigation, route }) {
         form={waterForm}
         setForm={setWaterForm}
         vendors={waterVendors}
-        onPickPhotos={pickWaterPhotos}
+        onCapturePhoto={captureWaterPhoto}
+        onRemovePhoto={removeWaterPhoto}
+        onRescanPhoto={rescanWaterPhoto}
         onSave={saveWaterInput}
+        submitDisabled={!isWaterFormReadyToSubmit(waterForm)}
       />
 
       <WaterVendorForm
@@ -6204,6 +6634,47 @@ const styles = StyleSheet.create({
     marginBottom: 0,
     paddingHorizontal: 10,
     paddingVertical: 10,
+  },
+  waterCollapsedTankWrap: {
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 4,
+  },
+  waterCollapsedTankTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  waterCollapsedTankTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: SEC.text,
+  },
+  waterCollapsedTankPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  waterCollapsedTankPillText: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  waterCollapsedTankMeta: {
+    fontSize: 11,
+    color: SEC.textMuted,
+    marginBottom: 6,
+  },
+  waterCollapsedBarTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: SEC.bg,
+    overflow: 'hidden',
+  },
+  waterCollapsedBarFill: {
+    height: '100%',
+    borderRadius: 3,
   },
   dutyGridAccordion: {
     flexDirection: 'row',
