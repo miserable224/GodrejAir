@@ -1,4 +1,5 @@
 import { WATER_PHOTO_TYPES } from '../constants/waterPhotoTypes';
+import { photoHasGps } from './geoPhoto';
 
 export function getTodayDMY() {
   const d = new Date();
@@ -195,7 +196,9 @@ export function isWaterFormReadyToSubmit(form, _maxPhotos = 4) {
     s.tds &&
     s.vehicle &&
     allWaterPhotoTypesCaptured(form) &&
-    (form.photos ?? []).every((p) => p.capturedAt && p.scanStatus === 'done')
+    (form.photos ?? []).every(
+      (p) => p.capturedAt && p.scanStatus === 'done' && photoHasGps(p),
+    )
   );
 }
 

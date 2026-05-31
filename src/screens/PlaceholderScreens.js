@@ -14,10 +14,10 @@ import {
   Image,
   Alert,
 } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import { pickGeoPhotoFromCamera } from '../utils/geoPhoto';
 import { useSafeBottomTabBarHeight } from '../utils/safeTabBarHeight';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS, SIZES, SHADOWS, DARK } from '../constants/theme';
@@ -286,49 +286,15 @@ export const WorkforceScreen = ({ route }) => {
 
   // Removed old Supabase water records fetch
 
-  const pickSecurityPhotosFromLibrary = async () => {
-    if (securityPhotos.length >= MAX_SECURITY_PHOTOS) {
-      Alert.alert('Photo limit', `You can attach up to ${MAX_SECURITY_PHOTOS} photos.`);
-      return;
-    }
-    try {
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert('Permission needed', 'Allow photo library access to attach images.');
-        return;
-      }
-      const remaining = MAX_SECURITY_PHOTOS - securityPhotos.length;
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsMultipleSelection: Platform.OS !== 'web',
-        selectionLimit: Platform.OS === 'web' ? 1 : remaining,
-        quality: 0.85,
-      });
-      if (result.canceled) return;
-      const assets = result.assets || [];
-      const next = assets.map((a, i) => ({ id: `${Date.now()}-${i}`, uri: a.uri }));
-      setSecurityPhotos((prev) => [...prev, ...next].slice(0, MAX_SECURITY_PHOTOS));
-    } catch (e) {
-      Alert.alert('Photos', e?.message || 'Could not open photo library.');
-    }
-  };
-
   const takeSecurityPhoto = async () => {
     if (securityPhotos.length >= MAX_SECURITY_PHOTOS) {
       Alert.alert('Photo limit', `You can attach up to ${MAX_SECURITY_PHOTOS} photos.`);
       return;
     }
     try {
-      const perm = await ImagePicker.requestCameraPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert('Permission needed', 'Allow camera access to take a photo.');
-        return;
-      }
-      const result = await ImagePicker.launchCameraAsync({ quality: 0.85 });
-      if (result.canceled) return;
-      const a = result.assets?.[0];
-      if (!a?.uri) return;
-      setSecurityPhotos((prev) => [...prev, { id: `${Date.now()}`, uri: a.uri }].slice(0, MAX_SECURITY_PHOTOS));
+      const photo = await pickGeoPhotoFromCamera({ dutyOnly: true, requireGps: true });
+      if (!photo?.uri) return;
+      setSecurityPhotos((prev) => [...prev, { id: `${Date.now()}`, ...photo }].slice(0, MAX_SECURITY_PHOTOS));
     } catch (e) {
       Alert.alert('Camera', e?.message || 'Could not use camera.');
     }
@@ -801,16 +767,10 @@ export const WorkforceScreen = ({ route }) => {
             />
 
             <Text style={wfStyles.formSectionTitle}>Duty photos (max {MAX_SECURITY_PHOTOS})</Text>
-            <View style={wfStyles.photoActionsRow}>
-              <TouchableOpacity style={wfStyles.formSecondaryBtn} onPress={pickSecurityPhotosFromLibrary} activeOpacity={0.85}>
-                <Ionicons name="images-outline" size={18} color={COLORS.primary} />
-                <Text style={wfStyles.formSecondaryBtnText}>Gallery</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={wfStyles.formSecondaryBtn} onPress={takeSecurityPhoto} activeOpacity={0.85}>
-                <Ionicons name="camera-outline" size={18} color={COLORS.primary} />
-                <Text style={wfStyles.formSecondaryBtnText}>Camera</Text>
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity style={wfStyles.formSecondaryBtn} onPress={takeSecurityPhoto} activeOpacity={0.85}>
+              <Ionicons name="camera-outline" size={18} color={COLORS.primary} />
+              <Text style={wfStyles.formSecondaryBtnText}>Take photo</Text>
+            </TouchableOpacity>
             <Text style={wfStyles.photoCountHint}>
               {securityPhotos.length} / {MAX_SECURITY_PHOTOS} selected
             </Text>

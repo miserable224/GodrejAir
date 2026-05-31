@@ -58,7 +58,6 @@ import { ExpenseRecordForm } from '../../components/ExpensesFormModals';
 import { computeWaterDashboard } from '../../utils/waterMetrics';
 import AttendanceRoleRow from '../../components/AttendanceRoleRow';
 import ModulePhotoSection from '../../components/ModulePhotoSection';
-import SecurityDutyDayGrid from '../../components/SecurityDutyDayGrid';
 import SecurityShiftShortageBar, {
   computeSecurityShiftShortage,
 } from '../../components/SecurityShiftShortageBar';
@@ -81,16 +80,20 @@ import {
   locationLabelFromPhoto,
   pickGeoPhotoForDuty,
   pickGeoPhotoFromCamera,
-  pickGeoPhotoFromLibrary,
+  photoHasGps,
+  alertGpsRequired,
 } from '../../utils/geoPhoto';
 import { WaterRecordForm, WaterVendorForm } from '../../components/WaterRecordForm';
 import { analyzeWaterPhotoWithVisionAPI, uriToBase64 } from '../../services/googleVisionService';
 import { analyzeWaterPhotoWithLLM } from '../../services/llmWaterVisionService';
 import {
   createWaterRecord,
+  createWaterVendor,
   fetchWaterRecords,
   fetchWaterVendors,
+  resolveWaterListQuery,
 } from '../../services/waterRecordService';
+import { compressUriToBase64 } from '../../utils/compressImage';
 import { MAX_WATER_SCAN_PHOTOS } from '../../constants/waterPhotoTypes';
 import {
   applyWaterOcrToForm,
@@ -108,34 +111,43 @@ import {
   ADMIN_COMMERCIAL_UNIT_AGREEMENTS,
   ADMIN_COMMAND_MODULES,
   ADMIN_PROMOTIONS_SNAPSHOT,
-  ADMIN_MYGATE_SNAPSHOT,
   ADMIN_MANPOWER_DEPLOYMENT,
   formatINR,
 } from '../../constants/data';
 import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
 import {
   filterDashboardSections,
   isModuleVisible,
 } from '../../constants/roles';
 import { BRAND_LOGO } from '../../constants/branding';
+import { isValidIndianMobile, normalizeIndianMobile } from '../../utils/phoneValidation';
 import { apiService } from '../../modules/shared';
 import {
   postDutyCheckIn,
   postDutyCheckOut,
   fetchOpenDutySession,
   fetchOnDutySessions,
-  fetchDutySessionsRange,
-  resolveSecurityDateParams,
   formatDutyDurationMinutes,
   postMobilePatrol,
   postStaffMember,
+  putStaffMember,
+  deleteStaffMember,
+  postDesignation,
+  putDesignation,
+  deleteDesignation,
   useSecurityData,
+  useStaffRoster,
+  useDutyDesignations,
   applyDeploymentEntriesToCounts,
   normalizeRoleKey,
   filterNamesAvailableForCheckIn,
+  rosterNamesForRoles,
+  rosterMembersForRoles,
+  normalizeStaffRole,
+  staffRoleMatchesAllowed,
   isStaffOnDuty,
 } from '../../modules/security';
-import { sessionMatchesShift } from '../../modules/security/utils/dutyShiftFilter';
 import {
   mergeHkDeploymentOverlay,
   useHousekeepingData,
@@ -144,12 +156,30 @@ import {
   postHkDutyCheckOut,
   fetchOpenHkDutySession,
   fetchOnDutyHkSessions,
-  fetchHkDutySessionsRange,
-  resolveWorkforceDateParams,
 } from '../../modules/housekeeping';
 import { SEC, SEC_FONTS, SEC_PLACEHOLDER } from '../../constants/securityTheme';
 
 const RENTALS_SUBTITLE = `${ADMIN_COLLECTIONS_VS_EXPECTED.received} vs billed targets · ${ADMIN_COLLECTIONS_VS_EXPECTED.periodLabel}`;
+
+/** Sentinel value in staff-name picker lists — opens the add-staff form. */
+const ADD_NEW_STAFF_SENTINEL = '__ADD_NEW_STAFF__';
+const ADD_NEW_STAFF_LABEL = '+ Add new staff';
+const ADD_NEW_DESIGNATION_SENTINEL = '__ADD_NEW_DESIGNATION__';
+const ADD_NEW_DESIGNATION_LABEL = 'Add new designation';
+
+function fallbackDesignationTitles(pickerContext) {
+  const category = pickerContext === 'hk' ? 'FM_HK' : 'Security';
+  return ADMIN_MANPOWER_DEPLOYMENT.filter((row) => row.category === category).map(
+    (row) => row.role,
+  );
+}
+
+function designationApiModule(pickerContext) {
+  return pickerContext === 'hk' ? 'housekeeping' : 'security';
+}
+
+const SECURITY_STAFF_ROLES = ['SECURITY_GUARD', 'SUPERVISOR', 'SECURITY_OFFICER'];
+const HK_STAFF_ROLES = ['HOUSEKEEPING', 'HK_SUPERVISOR', 'HK_STAFF', 'CLEANER'];
 
 const OPERATIONS_SECTIONS = [
   {
@@ -190,15 +220,6 @@ const ENGAGEMENT_SECTIONS = [
     color: '#D97706',
     featured: false,
   },
-  {
-    id: 'mygate',
-    stackScreen: 'AdminMyGateTickets',
-    title: 'MyGate tickets',
-    subtitle: `${ADMIN_MYGATE_SNAPSHOT.openTickets} open · ${ADMIN_MYGATE_SNAPSHOT.resolvedWeek} resolved this week`,
-    icon: 'ticket-outline',
-    color: '#0284C7',
-    featured: false,
-  },
 ];
 
 /** Post / gate options for deployment logging (admin picker). */
@@ -226,26 +247,8 @@ const DEPLOYMENT_LOCATION_OPTIONS = [
   'Back / Fire staircase zones',
 ];
 
-/** Shown when roster API returns no names (offline / empty DB). */
-const DEPLOYMENT_STAFF_FALLBACK_NAMES = [
-  'Kumar',
-  'Sharanu',
-  'Bishal Madgi',
-  'Sabir Ali',
-  'Mahesh Kumar',
-  'Gopal Krishna',
-  'Sowmya P',
-  'Tumpa Dutta',
-  'Ningayya',
-  'Mani Natrajan',
-  'Karthik Ravi',
-  'Sabuj Sarkar',
-  'Prasant',
-  'Govinda Rabi Das',
-  'Priya Sharma',
-  'Arjun Mehta',
-  'Anika Rao',
-];
+/** Shown when roster API returns no names (offline / empty DB). Production: empty until staff are added. */
+const DEPLOYMENT_STAFF_FALLBACK_NAMES = [];
 
 const pad2 = (n) => String(n).padStart(2, '0');
 
@@ -486,11 +489,60 @@ function AnimatedBrandLogo() {
   );
 }
 
-function FloatingModuleCard({ section, index, expanded, onPress, isLast, children }) {
+function FloatingModuleCard({
+  section,
+  index,
+  expanded,
+  expandable = true,
+  onPress,
+  isLast,
+  children,
+}) {
   const scale = useSharedValue(1);
   const cardAnim = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
   }));
+
+  const headerStyle = [
+    styles.moduleRow,
+    section.featured && styles.moduleRowFeatured,
+    expanded && expandable && styles.moduleRowExpanded,
+    expanded && expandable && section.id === 'Security' && styles.moduleRowSecurityExpanded,
+    expanded && expandable && section.id === 'Workforce' && styles.moduleRowSecurityExpanded,
+    expanded && expandable && section.id === 'rentals' && styles.moduleRowRentalsExpanded,
+    expanded && expandable && section.id === 'amc' && styles.moduleRowAmcExpanded,
+    expanded && expandable && section.id === 'WaterTracking' && styles.moduleRowOpsExpanded,
+    expanded && expandable && section.id === 'Expenses' && styles.moduleRowOpsExpanded,
+  ];
+
+  const headerInner = (
+    <>
+      <View
+        style={[
+          styles.moduleIconWrap,
+          { backgroundColor: section.color + '22' },
+          section.featured && { borderColor: section.color + '55', borderWidth: 1 },
+        ]}
+      >
+        <Ionicons name={section.icon} size={21} color={section.color} />
+      </View>
+      <Text
+        style={[styles.moduleTitle, section.featured && styles.moduleTitleFeatured]}
+        numberOfLines={1}
+      >
+        {section.title}
+      </Text>
+      {expandable ? (
+        <View style={[styles.moduleChevronWrap, expanded && styles.moduleChevronWrapOpen]}>
+          <Ionicons
+            name={expanded ? 'chevron-up' : 'chevron-down'}
+            size={16}
+            color={expanded ? COLORS.primary : COLORS.textLight}
+          />
+        </View>
+      ) : null}
+    </>
+  );
 
   return (
     <Animated.View
@@ -499,59 +551,35 @@ function FloatingModuleCard({ section, index, expanded, onPress, isLast, childre
         .springify()
         .damping(16)
         .stiffness(140)}
-      style={[
-        styles.floatCard,
-        isLast && styles.floatCardLast,
-        expanded && styles.floatCardExpanded,
-        cardAnim,
-      ]}
+      style={styles.floatCardOuter}
     >
-      <Pressable
-        style={({ pressed }) => [
-          styles.moduleRow,
-          section.featured && styles.moduleRowFeatured,
-          expanded && styles.moduleRowExpanded,
-          expanded && section.id === 'Security' && styles.moduleRowSecurityExpanded,
-          expanded && section.id === 'Workforce' && styles.moduleRowSecurityExpanded,
-          expanded && section.id === 'rentals' && styles.moduleRowRentalsExpanded,
-          expanded && section.id === 'amc' && styles.moduleRowAmcExpanded,
-          expanded && section.id === 'WaterTracking' && styles.moduleRowOpsExpanded,
-          expanded && section.id === 'Expenses' && styles.moduleRowOpsExpanded,
-          pressed && styles.moduleRowPressed,
+      <Animated.View
+        style={[
+          styles.floatCard,
+          isLast && styles.floatCardLast,
+          expanded && expandable && styles.floatCardExpanded,
+          cardAnim,
         ]}
-        onPress={onPress}
-        onPressIn={() => {
-          scale.value = withTiming(0.985, { duration: 90 });
-        }}
-        onPressOut={() => {
-          scale.value = withTiming(1, { duration: 140 });
-        }}
-        android_ripple={{ color: 'rgba(62, 232, 197, 0.1)' }}
       >
-        <View
-          style={[
-            styles.moduleIconWrap,
-            { backgroundColor: section.color + '22' },
-            section.featured && { borderColor: section.color + '55', borderWidth: 1 },
-          ]}
-        >
-          <Ionicons name={section.icon} size={21} color={section.color} />
-        </View>
-        <Text
-          style={[styles.moduleTitle, section.featured && styles.moduleTitleFeatured]}
-          numberOfLines={1}
-        >
-          {section.title}
-        </Text>
-        <View style={[styles.moduleChevronWrap, expanded && styles.moduleChevronWrapOpen]}>
-          <Ionicons
-            name={expanded ? 'chevron-up' : 'chevron-down'}
-            size={16}
-            color={expanded ? COLORS.primary : COLORS.textLight}
-          />
-        </View>
-      </Pressable>
-      {children}
+        {expandable ? (
+          <Pressable
+            style={({ pressed }) => [...headerStyle, pressed && styles.moduleRowPressed]}
+            onPress={onPress}
+            onPressIn={() => {
+              scale.value = withTiming(0.985, { duration: 90 });
+            }}
+            onPressOut={() => {
+              scale.value = withTiming(1, { duration: 140 });
+            }}
+            android_ripple={{ color: 'rgba(62, 232, 197, 0.1)' }}
+          >
+            {headerInner}
+          </Pressable>
+        ) : (
+          <View style={headerStyle}>{headerInner}</View>
+        )}
+        {children}
+      </Animated.View>
     </Animated.View>
   );
 }
@@ -561,11 +589,14 @@ export default function AdminDashboardScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const tabBarHeight = useSafeBottomTabBarHeight();
   const { logout, token, user, permissions } = useAuth();
+  const { showToast } = useToast();
 
   const visibleDashboardSections = useMemo(
     () => filterDashboardSections(DASHBOARD_SECTIONS, user?.apiRole),
     [user?.apiRole],
   );
+
+  const fieldOpsLimited = permissions?.isFieldOpsDashboard ?? false;
 
   const [expandedId, setExpandedId] = useState(null);
   const [duesTipOpen, setDuesTipOpen] = useState(false);
@@ -638,7 +669,6 @@ export default function AdminDashboardScreen({ navigation, route }) {
   const [hkDeployDatePreset, setHkDeployDatePreset] = useState('today');
   const [hkDeployCustomRange, setHkDeployCustomRange] = useState({ from: '', to: '' });
   const [hkDeployDateMenuOpen, setHkDeployDateMenuOpen] = useState(false);
-  const [hkDutyGridOpen, setHkDutyGridOpen] = useState(false);
   const [hkDeploymentOpen, setHkDeploymentOpen] = useState(false);
   const {
     staffCounts: securityStaffCounts,
@@ -648,7 +678,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
     setSanctionedStrength,
     securityBilling,
     securityDashboard,
-    staffRoster,
+    staffRoster: securityBurstStaffRoster,
     isLoading: isStaffLoading,
     fetchErrors,
     periodLabel: securityPeriodLabel,
@@ -657,21 +687,15 @@ export default function AdminDashboardScreen({ navigation, route }) {
     token,
     dateRange: SECURITY_DEPLOY_RANGE_MAP[securityDeployDatePreset] ?? 'Today',
     customRange: securityDeployCustomRange,
-    enabled: (permissions?.canSeeModule('Security') ?? true),
+    enabled:
+      (permissions?.canSeeModule('Security') ?? true) && expandedId === 'Security',
   });
 
   const [onDutySessions, setOnDutySessions] = useState([]);
   const [onDutyHkSessions, setOnDutyHkSessions] = useState([]);
   const [onDutyLoading, setOnDutyLoading] = useState(false);
   const [onDutyHkLoading, setOnDutyHkLoading] = useState(false);
-  const [securityDaySessions, setSecurityDaySessions] = useState([]);
-  const [securityDayLoading, setSecurityDayLoading] = useState(false);
-  const [securityDutyGridOpen, setSecurityDutyGridOpen] = useState(false);
   const [securityDeploymentOpen, setSecurityDeploymentOpen] = useState(false);
-  const [hkDaySessions, setHkDaySessions] = useState([]);
-  const [hkDayLoading, setHkDayLoading] = useState(false);
-  const [activeHkShift, setActiveHkShift] = useState(1);
-
   const loadOnDutyForSection = useCallback(
     async (sectionId) => {
       if (!token) return;
@@ -704,50 +728,6 @@ export default function AdminDashboardScreen({ navigation, route }) {
     [token],
   );
 
-  const loadSecurityDayBoard = useCallback(async () => {
-    if (!token) return;
-    setSecurityDayLoading(true);
-    try {
-      const accessToken = (await ensureValidAccessToken()) || token;
-      if (!accessToken) return;
-      const params = resolveSecurityDateParams('Today', {});
-      const list = await fetchDutySessionsRange(accessToken, {
-        from: params.from,
-        to: params.to,
-      });
-      setSecurityDaySessions(Array.isArray(list) ? list : []);
-    } catch (err) {
-      console.warn('Security day board:', err?.message);
-      setSecurityDaySessions([]);
-    } finally {
-      setSecurityDayLoading(false);
-    }
-  }, [token]);
-
-  const loadHkDayBoard = useCallback(async () => {
-    if (!token) return;
-    setHkDayLoading(true);
-    try {
-      const accessToken = (await ensureValidAccessToken()) || token;
-      if (!accessToken) return;
-      const params = resolveWorkforceDateParams('today', {});
-      if (!params.valid) {
-        setHkDaySessions([]);
-        return;
-      }
-      const list = await fetchHkDutySessionsRange(accessToken, {
-        from: params.from,
-        to: params.to,
-      });
-      setHkDaySessions(Array.isArray(list) ? list : []);
-    } catch (err) {
-      console.warn('HK day board:', err?.message);
-      setHkDaySessions([]);
-    } finally {
-      setHkDayLoading(false);
-    }
-  }, [token]);
-
   useEffect(() => {
     if (expandedId === 'Security') {
       loadOnDutyForSection('Security');
@@ -755,18 +735,6 @@ export default function AdminDashboardScreen({ navigation, route }) {
       loadOnDutyForSection('Workforce');
     }
   }, [expandedId, loadOnDutyForSection]);
-
-  useEffect(() => {
-    if (expandedId === 'Security' && securityDutyGridOpen) {
-      loadSecurityDayBoard();
-    }
-  }, [expandedId, securityDutyGridOpen, loadSecurityDayBoard]);
-
-  useEffect(() => {
-    if (expandedId === 'Workforce' && hkDutyGridOpen) {
-      loadHkDayBoard();
-    }
-  }, [expandedId, hkDutyGridOpen, loadHkDayBoard]);
 
   const [hkDutyModal, setHkDutyModal] = useState(null);
   const [hkCheckoutSessionId, setHkCheckoutSessionId] = useState(null);
@@ -781,6 +749,15 @@ export default function AdminDashboardScreen({ navigation, route }) {
 
   useFocusEffect(
     useCallback(() => {
+      if (fieldOpsLimited) {
+        navigation.setParams({
+          expandSecurityDeployment: undefined,
+          expandHousekeepingDeployment: undefined,
+          settingsAction: undefined,
+        });
+        return;
+      }
+
       if (route.params?.expandSecurityDeployment) {
         LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
         setExpandedId('Security');
@@ -795,29 +772,41 @@ export default function AdminDashboardScreen({ navigation, route }) {
         navigation.setParams({ expandHousekeepingDeployment: undefined });
       }
 
-      const action = route.params?.settingsAction;
-      if (action === 'recordPatrol' && isModuleVisible('Security', user?.apiRole)) {
-        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-        setExpandedId('Security');
-        setRecordPatrolOpen(true);
-        navigation.setParams({ settingsAction: undefined });
-        return;
-      }
-
-      if (action) {
+      if (route.params?.settingsAction) {
         navigation.setParams({ settingsAction: undefined });
       }
     }, [
+      fieldOpsLimited,
       route.params?.expandSecurityDeployment,
       route.params?.expandHousekeepingDeployment,
       route.params?.settingsAction,
       navigation,
-      user?.apiRole,
     ]),
   );
 
   /** 'check-in' | 'check-out' — shared deployment-style form modal */
   const [securityDutyModal, setSecurityDutyModal] = useState(null);
+
+  const staffRosterEnabled =
+    Boolean(token)
+    && (
+      ((permissions?.canSeeModule('Security') ?? true) && expandedId === 'Security')
+      || ((permissions?.canSeeModule('Workforce') ?? true) && expandedId === 'Workforce')
+      || securityDutyModal != null
+      || hkDutyModal != null
+    );
+
+  const { roster: staffRosterLive, refresh: refreshStaffRoster } = useStaffRoster({
+    token,
+    enabled: staffRosterEnabled,
+  });
+
+  const staffRoster = useMemo(() => {
+    if (staffRosterLive?.length) return staffRosterLive;
+    if (securityBurstStaffRoster?.length) return securityBurstStaffRoster;
+    return staffRosterLive ?? [];
+  }, [staffRosterLive, securityBurstStaffRoster]);
+
   const [checkoutDutySessionId, setCheckoutDutySessionId] = useState(null);
   const [isSavingDuty, setIsSavingDuty] = useState(false);
   /** Guards checked in today — used for patrol staff picker until API refresh. */
@@ -826,12 +815,31 @@ export default function AdminDashboardScreen({ navigation, route }) {
   const [recordStaffType, setRecordStaffType] = useState('Security');
   const [isSavingPatrol, setIsSavingPatrol] = useState(false);
   const [addStaffOpen, setAddStaffOpen] = useState(false);
+  /** When set, saving staff auto-selects the new name on the open duty check-in form. */
+  const [addStaffContext, setAddStaffContext] = useState(null);
+  const [isSavingStaff, setIsSavingStaff] = useState(false);
+  const [staffSaveError, setStaffSaveError] = useState('');
+  const [staffDeleteTarget, setStaffDeleteTarget] = useState(null);
+  const [isDeletingStaff, setIsDeletingStaff] = useState(false);
+  /** 'security' | 'hk' while the check-in staff name picker is open (edit/delete roster). */
+  const [staffPickerContext, setStaffPickerContext] = useState(null);
+  /** 'security' | 'hk' while the check-in designation picker is open (edit/delete list). */
+  const [designationPickerContext, setDesignationPickerContext] = useState(null);
+  const [addDesignationOpen, setAddDesignationOpen] = useState(false);
+  const [addDesignationContext, setAddDesignationContext] = useState(null);
+  const [isSavingDesignation, setIsSavingDesignation] = useState(false);
+  const [designationSaveError, setDesignationSaveError] = useState('');
+  const [designationDeleteTarget, setDesignationDeleteTarget] = useState(null);
+  const [isDeletingDesignation, setIsDeletingDesignation] = useState(false);
+  const [designationForm, setDesignationForm] = useState({ id: null, title: '' });
   const [staffForm, setStaffForm] = useState({
+    id: null,
     name: '',
     badgeNumber: '',
     role: 'SECURITY_GUARD',
     phone: '',
   });
+
   const [shopForm, setShopForm] = useState({
     unit: '',
     tenant: '',
@@ -866,52 +874,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
   });
   const [trainerUpdates, setTrainerUpdates] = useState([]);
   const [recentPayments, setRecentPayments] = useState([]);
-  const [waterRecords, setWaterRecords] = useState([
-    {
-      id: 'water-002',
-      date: '24/05/26',
-      source: 'Bwssb water tanker',
-      sourceType: 'tanker',
-      vehicleNo: 'KA19AC4789',
-      openingMeter: '076522,7',
-      closingMeter: '076534,8',
-      tds: '547',
-      load: '06',
-      tankLevelKl: '85',
-      photos: [],
-    },
-    {
-      id: 'water-001',
-      date: '06/05/26',
-      source: 'SwS water tanker',
-      sourceType: 'tanker',
-      vehicleNo: 'KA53JR1035',
-      openingMeter: '074808',
-      closingMeter: '074822',
-      tds: '284',
-      load: '02',
-      tankLevelKl: '62',
-      photos: [],
-    },
-  ]);
-  const [waterVendors, setWaterVendors] = useState([
-    {
-      id: 'v-001',
-      name: 'SwS water tanker',
-      contactNumber: '9876543210',
-      address: 'KR Puram, Bengaluru',
-      vehicleNo: 'KA53JR1035',
-      tankerCapacityKl: 12,
-    },
-    {
-      id: 'v-002',
-      name: 'Bwssb water tanker',
-      contactNumber: '9123456789',
-      address: 'Indiranagar, Bengaluru',
-      vehicleNo: 'KA19AC4789',
-      tankerCapacityKl: 9,
-    },
-  ]);
+  const [waterRecords, setWaterRecords] = useState([]);
+  const [waterVendors, setWaterVendors] = useState([]);
   const [waterForm, setWaterForm] = useState(() => createEmptyWaterForm());
   // Society reservoir. 1 m³ = 1 KL, so "767,615 m³" is stored as 767,615 KL.
   const [tankCapacityKl] = useState(1_000_000);
@@ -927,18 +891,22 @@ export default function AdminDashboardScreen({ navigation, route }) {
     return `${m[3]}/${m[2]}/${m[1].slice(2)}`;
   };
 
-  // Pulls the latest tanker records (with persisted photos) from the API and
-  // replaces the local seed list. Used:
-  //   • once on mount
-  //   • every time the Water section is expanded
-  //   • when the user taps the refresh icon in the grid
-  // If the call fails (offline / no backend) the existing rows stay so the
-  // UI doesn't go blank.
+  const [waterFilter, setWaterFilter] = useState('today');
+  const [waterCustomFrom, setWaterCustomFrom] = useState('');
+  const [waterCustomTo, setWaterCustomTo] = useState('');
+  const [waterSourceFilter, setWaterSourceFilter] = useState('all');
+  const [waterTankerFilter, setWaterTankerFilter] = useState('all');
+
+  // Load water records only while the Water section is expanded (avoids mount +
+  // filter double-fetch). List uses includePhotos=false for a smaller payload.
   const [waterRecordsLoading, setWaterRecordsLoading] = useState(false);
-  const loadWaterRecords = useCallback(async () => {
+  const loadWaterRecords = useCallback(async (opts = {}) => {
+    const days = Number.isFinite(opts.days) && opts.days > 0 ? Math.ceil(opts.days) : 31;
+    const limit = Number.isFinite(opts.limit) && opts.limit > 0 ? Math.ceil(opts.limit) : 200;
+    const includePhotos = opts.includePhotos === true;
     setWaterRecordsLoading(true);
     try {
-      const remote = await fetchWaterRecords({ days: 90, limit: 200 });
+      const remote = await fetchWaterRecords({ days, limit, includePhotos });
       if (!Array.isArray(remote)) return;
       const mapped = remote.map((r) => ({
         id: r.id,
@@ -952,6 +920,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
         tds: r.tds ?? '',
         load: r.load ?? '',
         tankLevelKl: r.tankLevelKl ?? '',
+        photoCount: r.photoCount ?? (Array.isArray(r.photos) ? r.photos.length : 0),
         photos: Array.isArray(r.photos)
           ? r.photos.map((p) => ({
               id: p.id,
@@ -967,8 +936,6 @@ export default function AdminDashboardScreen({ navigation, route }) {
           : [],
         synced: true,
       }));
-      // Always replace when we get a successful response — even if empty — so
-      // a vendor that's been removed from the DB doesn't linger in the UI.
       setWaterRecords(mapped);
     } catch (err) {
       console.warn('[water] failed to load records from API', err?.message);
@@ -977,20 +944,21 @@ export default function AdminDashboardScreen({ navigation, route }) {
     }
   }, []);
 
-  useEffect(() => {
-    loadWaterRecords();
-  }, [loadWaterRecords]);
+  const refreshWaterRecords = useCallback(() => {
+    const q = resolveWaterListQuery(waterFilter, waterCustomFrom, waterCustomTo);
+    if (q.skip) return;
+    return loadWaterRecords({ ...q, includePhotos: false });
+  }, [waterFilter, waterCustomFrom, waterCustomTo, loadWaterRecords]);
 
-  const [waterFilter, setWaterFilter] = useState('today');
-  const [waterCustomFrom, setWaterCustomFrom] = useState('');
-  const [waterCustomTo, setWaterCustomTo] = useState('');
-  const [waterSourceFilter, setWaterSourceFilter] = useState('all');
-  const [waterTankerFilter, setWaterTankerFilter] = useState('all');
+  useEffect(() => {
+    if (expandedId !== 'WaterTracking') return;
+    const q = resolveWaterListQuery(waterFilter, waterCustomFrom, waterCustomTo);
+    if (q.skip) return;
+    loadWaterRecords({ ...q, includePhotos: false });
+  }, [expandedId, waterFilter, waterCustomFrom, waterCustomTo, loadWaterRecords]);
   const [waterVendorForm, setWaterVendorForm] = useState({
     name: '',
-    contactNumber: '',
-    address: '',
-    vehicleNo: '',
+    tankerCapacityKl: '',
   });
   const [expenseEntries, setExpenseEntries] = useState([
     { id: 'exp-001', date: '28/02/26', category: 'Electrical', amount: 74200, vendor: 'PowerGrid Services', note: 'Transformer panel maintenance' },
@@ -1035,7 +1003,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
     token,
     staffTimePreset: hkDeployDatePreset,
     staffDateRange: hkDeployCustomRange,
-    enabled: permissions?.canSeeModule('Workforce') ?? true,
+    enabled:
+      (permissions?.canSeeModule('Workforce') ?? true) && expandedId === 'Workforce',
   });
 
   const hkRoleDisplayRows = useMemo(() => {
@@ -1047,50 +1016,14 @@ export default function AdminDashboardScreen({ navigation, route }) {
     () => computeSecurityShiftShortage(hkRoleDisplayRows),
     [hkRoleDisplayRows],
   );
-  const [activeShift, setActiveShift] = useState(1); // 1 or 2
-
-  const securityGridSessions = useMemo(() => {
-    const byId = new Map();
-    for (const s of securityDaySessions) {
-      if (sessionMatchesShift(s, activeShift) && s.id) byId.set(s.id, s);
-    }
-    for (const s of onDutySessions) {
-      if (sessionMatchesShift(s, activeShift) && s.id && !byId.has(s.id)) {
-        byId.set(s.id, s);
-      }
-    }
-    return [...byId.values()];
-  }, [securityDaySessions, onDutySessions, activeShift]);
-
-  const hkGridSessions = useMemo(() => {
-    const byId = new Map();
-    for (const s of hkDaySessions) {
-      if (sessionMatchesShift(s, activeHkShift) && s.id) byId.set(s.id, s);
-    }
-    for (const s of onDutyHkSessions) {
-      if (sessionMatchesShift(s, activeHkShift) && s.id && !byId.has(s.id)) {
-        byId.set(s.id, s);
-      }
-    }
-    return [...byId.values()];
-  }, [hkDaySessions, onDutyHkSessions, activeHkShift]);
-
   useEffect(() => {
     if (expandedId !== 'Security') {
-      setSecurityDutyGridOpen(false);
       setSecurityDeploymentOpen(false);
     }
     if (expandedId !== 'Workforce') {
-      setHkDutyGridOpen(false);
       setHkDeploymentOpen(false);
     }
-    // Whenever the user opens the Water section, pull the freshest records
-    // from the API. Without this, rows added via Supabase Studio or another
-    // device wouldn't appear until the app is fully restarted.
-    if (expandedId === 'WaterTracking') {
-      loadWaterRecords();
-    }
-  }, [expandedId, loadWaterRecords]);
+  }, [expandedId]);
 
   const [staffAttendancePhoto, setStaffAttendancePhoto] = useState(null);
   const [deploymentForm, setDeploymentForm] = useState({
@@ -1100,25 +1033,51 @@ export default function AdminDashboardScreen({ navigation, route }) {
   });
   const [deploymentPickerOpen, setDeploymentPickerOpen] = useState(null);
   /** 'designation' | 'location' | 'name' | null */
-  const designationOptions = useMemo(
-    () =>
-      ADMIN_MANPOWER_DEPLOYMENT.filter((row) =>
-        recordStaffType === 'FM_HK' || hkDutyModal != null
-          ? row.category === 'FM_HK'
-          : row.category === 'Security',
-      ).map((row) => row.role),
-    [recordStaffType, hkDutyModal],
+
+  const designationsEnabled =
+    Boolean(token)
+    && (
+      staffRosterEnabled
+      || designationPickerContext != null
+      || addDesignationOpen
+      || deploymentPickerOpen === 'designation'
+    );
+
+  const {
+    byModule: designationsByModule,
+    isLoading: designationsLoading,
+    refresh: refreshDesignations,
+  } = useDutyDesignations({
+    token,
+    enabled: designationsEnabled,
+  });
+
+  const designationOptions = useMemo(() => {
+    const isHk = recordStaffType === 'FM_HK' || hkDutyModal != null;
+    const api = isHk ? designationsByModule.housekeeping : designationsByModule.security;
+    if (api?.length) return api.map((d) => d.title);
+    return fallbackDesignationTitles(isHk ? 'hk' : 'security');
+  }, [recordStaffType, hkDutyModal, designationsByModule]);
+
+  const designationPickerEntries = useMemo(() => {
+    if (!designationPickerContext) return [];
+    return designationPickerContext === 'hk'
+      ? designationsByModule.housekeeping
+      : designationsByModule.security;
+  }, [designationPickerContext, designationsByModule]);
+
+  const showDesignationManagePicker =
+    deploymentPickerOpen === 'designation' && designationPickerContext != null;
+
+  const securityRosterNames = useMemo(
+    () => rosterNamesForRoles(staffRoster, SECURITY_STAFF_ROLES),
+    [staffRoster],
   );
 
-  const deploymentStaffNames = useMemo(() => {
-    const names = (staffRoster || []).map((s) => s.name).filter(Boolean);
-    return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
-  }, [staffRoster]);
-
-  const staffNameOptions = useMemo(() => {
-    if (deploymentStaffNames.length > 0) return deploymentStaffNames;
-    return DEPLOYMENT_STAFF_FALLBACK_NAMES;
-  }, [deploymentStaffNames]);
+  const hkRosterNames = useMemo(
+    () => rosterNamesForRoles(staffRoster, HK_STAFF_ROLES),
+    [staffRoster],
+  );
 
   /** Staff checked in today — patrolling picker only. */
   const patrolStaffNameOptions = useMemo(() => {
@@ -1139,30 +1098,54 @@ export default function AdminDashboardScreen({ navigation, route }) {
   }, [onDutyHkSessions]);
 
   const securityCheckInNameOptions = useMemo(
-    () => filterNamesAvailableForCheckIn(staffNameOptions, onDutySessions),
-    [staffNameOptions, onDutySessions],
+    () => filterNamesAvailableForCheckIn(securityRosterNames, onDutySessions),
+    [securityRosterNames, onDutySessions],
   );
 
   const hkCheckInNameOptions = useMemo(
-    () => filterNamesAvailableForCheckIn(staffNameOptions, onDutyHkSessions),
-    [staffNameOptions, onDutyHkSessions],
+    () => filterNamesAvailableForCheckIn(hkRosterNames, onDutyHkSessions),
+    [hkRosterNames, onDutyHkSessions],
   );
 
+  const staffPickerEntries = useMemo(() => {
+    if (!staffPickerContext) return [];
+    const allowedRoles =
+      staffPickerContext === 'hk' ? HK_STAFF_ROLES : SECURITY_STAFF_ROLES;
+    return rosterMembersForRoles(staffRoster, allowedRoles);
+  }, [staffRoster, staffPickerContext]);
+
+  const showStaffManagePicker =
+    deploymentPickerOpen === 'name' && staffPickerContext != null;
+
   const deploymentPickerOptions = useMemo(() => {
-    if (deploymentPickerOpen === 'designation') return designationOptions;
+    if (deploymentPickerOpen === 'designation') {
+      if (securityDutyModal === 'check-in' || hkDutyModal === 'check-in') {
+        return [ADD_NEW_DESIGNATION_SENTINEL, ...designationOptions];
+      }
+      return designationOptions;
+    }
     if (deploymentPickerOpen === 'location') return DEPLOYMENT_LOCATION_OPTIONS;
     if (deploymentPickerOpen === 'name') {
-      if (securityDutyModal === 'check-out') return checkoutNameOptions;
-      if (hkDutyModal === 'check-out') return hkCheckoutNameOptions;
-      if (securityDutyModal === 'check-in') return securityCheckInNameOptions;
-      if (hkDutyModal === 'check-in') return hkCheckInNameOptions;
-      return staffNameOptions;
+      let names;
+      if (securityDutyModal === 'check-out') names = checkoutNameOptions;
+      else if (hkDutyModal === 'check-out') names = hkCheckoutNameOptions;
+      else if (securityDutyModal === 'check-in') names = securityCheckInNameOptions;
+      else if (hkDutyModal === 'check-in') names = hkCheckInNameOptions;
+      else if (recordStaffType === 'FM_HK' || hkDutyModal != null) names = hkRosterNames;
+      else names = securityRosterNames;
+
+      if (securityDutyModal === 'check-in' || hkDutyModal === 'check-in') {
+        return [ADD_NEW_STAFF_SENTINEL, ...names];
+      }
+      return names;
     }
     return [];
   }, [
     deploymentPickerOpen,
     designationOptions,
-    staffNameOptions,
+    securityRosterNames,
+    hkRosterNames,
+    recordStaffType,
     securityDutyModal,
     hkDutyModal,
     checkoutNameOptions,
@@ -1211,6 +1194,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
   );
 
   const toggle = (id) => {
+    if (fieldOpsLimited && permissions?.canExpandModule?.(id) === false) return;
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setExpandedId((cur) => {
       const next = cur === id ? null : id;
@@ -1675,10 +1659,21 @@ export default function AdminDashboardScreen({ navigation, route }) {
 
   const saveWaterInput = async () => {
     if (!isWaterFormReadyToSubmit(waterForm)) {
-      Alert.alert(
-        'Incomplete entry',
-        'Select vendor, capture 4 scanned photos, fill all readings, and confirm before submitting.',
+      const missingGps = (waterForm.photos ?? []).some(
+        (p) => p.scanStatus === 'done' && !photoHasGps(p),
       );
+      Alert.alert(
+        missingGps ? 'GPS required on all photos' : 'Incomplete entry',
+        missingGps
+          ? 'Each photo must include GPS coordinates. Turn on location, then retake any photo that shows “GPS unavailable”.'
+          : 'Select vendor, capture 4 scanned photos with GPS, fill all readings, and confirm before submitting.',
+      );
+      return;
+    }
+
+    const photosWithoutGps = (waterForm.photos ?? []).filter((p) => !photoHasGps(p));
+    if (photosWithoutGps.length > 0) {
+      alertGpsRequired();
       return;
     }
 
@@ -1696,10 +1691,10 @@ export default function AdminDashboardScreen({ navigation, route }) {
     const photoUploads = [];
     for (const p of waterForm.photos ?? []) {
       try {
-        const base64 = await uriToBase64(p.uri);
+        const { base64, mimeType } = await compressUriToBase64(p.uri);
         photoUploads.push({
           base64,
-          mimeType: 'image/jpeg',
+          mimeType: mimeType || 'image/jpeg',
           photoType: p.detectedType || 'unknown',
           detectedValue: p.detectedValue ?? null,
           scanConfidence: typeof p.scanConfidence === 'number' ? p.scanConfidence : null,
@@ -1768,6 +1763,9 @@ export default function AdminDashboardScreen({ navigation, route }) {
       ]);
       setWaterForm(createEmptyWaterForm());
       setRecordWaterOpen(false);
+      if (expandedId === 'WaterTracking') {
+        void refreshWaterRecords();
+      }
       Alert.alert('Saved', 'Water entry persisted to the database.');
     } catch (err) {
       console.error('[saveWaterInput] API failed', err);
@@ -1778,26 +1776,30 @@ export default function AdminDashboardScreen({ navigation, route }) {
     }
   };
 
-  const saveWaterVendor = () => {
-    if (!waterVendorForm.name.trim() || !waterVendorForm.vehicleNo.trim()) return;
-    const nextId = `v-${Date.now()}`;
-    const nextVendor = {
-      id: nextId,
-      name: waterVendorForm.name.trim(),
-      contactNumber: waterVendorForm.contactNumber.trim() || 'N/A',
-      address: waterVendorForm.address.trim() || 'N/A',
-      vehicleNo: waterVendorForm.vehicleNo.trim(),
-    };
-    setWaterVendors((cur) => [nextVendor, ...cur]);
-    setWaterForm((prev) => ({
-      ...prev,
-      tankerVendorId: nextId,
-      source: nextVendor.name,
-      sourceType: 'tanker',
-      vehicleNo: nextVendor.vehicleNo,
-    }));
-    setWaterVendorForm({ name: '', contactNumber: '', address: '', vehicleNo: '' });
-    setWaterVendorOpen(false);
+  const saveWaterVendor = async () => {
+    if (!waterVendorForm.name.trim()) {
+      Alert.alert('Vendor name required', 'Enter the tanker supplier name.');
+      return;
+    }
+    const capacity = Number(waterVendorForm.tankerCapacityKl);
+    try {
+      const saved = await createWaterVendor({
+        name: waterVendorForm.name.trim(),
+        tankerCapacityKl: Number.isFinite(capacity) && capacity > 0 ? capacity : null,
+      });
+      setWaterVendors((cur) => [saved, ...cur]);
+      setWaterForm((prev) => ({
+        ...prev,
+        tankerVendorId: saved.id,
+        source: saved.name,
+        sourceType: 'tanker',
+      }));
+      setWaterVendorForm({ name: '', tankerCapacityKl: '' });
+      setWaterVendorOpen(false);
+      Alert.alert('Vendor saved', `${saved.name} is ready to use when recording water.`);
+    } catch (err) {
+      Alert.alert('Save failed', err?.message || 'Could not save vendor.');
+    }
   };
 
   const parseDMY = (value) => {
@@ -1914,7 +1916,9 @@ export default function AdminDashboardScreen({ navigation, route }) {
     const needle = selectedName.trim().toLowerCase();
     if (!needle) return '';
     const rosterMatch = (staffRoster || []).find(
-      (s) => s.name?.trim().toLowerCase() === needle,
+      (s) =>
+        s.name?.trim().toLowerCase() === needle
+        && SECURITY_STAFF_ROLES.includes(normalizeStaffRole(s.role)),
     );
     return rosterMatch?.name?.trim() || selectedName.trim();
   };
@@ -1929,7 +1933,11 @@ export default function AdminDashboardScreen({ navigation, route }) {
     }
     const ph = patrolForm.photos?.[0];
     if (!hasPatrolPhoto(ph)) {
-      Alert.alert('Photo required', 'Capture a patrol photo with the camera or gallery.');
+      Alert.alert('Photo required', 'Capture a patrol photo with the camera.');
+      return;
+    }
+    if (!photoHasGps(ph)) {
+      alertGpsRequired();
       return;
     }
 
@@ -2037,7 +2045,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
       onWaterTankerFilterChange={setWaterTankerFilter}
       onRecordInput={openWaterRecordForm}
       onAddVendor={() => setWaterVendorOpen(true)}
-      onRefresh={loadWaterRecords}
+      onRefresh={refreshWaterRecords}
       refreshing={waterRecordsLoading}
     />
   );
@@ -2059,28 +2067,6 @@ export default function AdminDashboardScreen({ navigation, route }) {
         <Ionicons name="navigate-outline" size={16} color={COLORS.textSecondary} />
         <Text style={styles.expandFootNoteText}>
           {ADMIN_PROMOTIONS_SNAPSHOT.reachLabel}: {ADMIN_PROMOTIONS_SNAPSHOT.reachValue}
-        </Text>
-      </View>
-    </View>
-  );
-
-  const renderMyGateDetails = () => (
-    <View style={styles.detailsInner}>
-      <Text style={styles.expandKicker}>{ADMIN_MYGATE_SNAPSHOT.headline}</Text>
-      <View style={styles.statRow}>
-        <View style={[styles.statCell, { borderLeftColor: '#0284C7' }]}>
-          <Text style={styles.statValue}>{ADMIN_MYGATE_SNAPSHOT.openTickets}</Text>
-          <Text style={styles.statLabel}>Open tickets</Text>
-        </View>
-        <View style={[styles.statCell, { borderLeftColor: COLORS.success }]}>
-          <Text style={styles.statValue}>{ADMIN_MYGATE_SNAPSHOT.resolvedWeek}</Text>
-          <Text style={styles.statLabel}>Resolved (7d)</Text>
-        </View>
-      </View>
-      <View style={styles.expandFootNote}>
-        <Ionicons name="time-outline" size={16} color={COLORS.textSecondary} />
-        <Text style={styles.expandFootNoteText}>
-          {ADMIN_MYGATE_SNAPSHOT.avgResponseLabel}: {ADMIN_MYGATE_SNAPSHOT.avgResponseValue}
         </Text>
       </View>
     </View>
@@ -2109,6 +2095,49 @@ export default function AdminDashboardScreen({ navigation, route }) {
     </View>
   );
 
+  const openPatrolForm = useCallback(() => {
+    setPatrolForm({ staffId: '', locationId: '', notes: '', photos: [] });
+    setPatrolPickerOpen(false);
+    setRecordPatrolOpen(true);
+  }, []);
+
+  const renderSecurityActionButtons = () => {
+    if (!permissions?.canUseSecurityOps) return null;
+    const showPatrol = permissions?.canRecordSecurityPatrol;
+    return (
+      <View style={styles.securityCollapsedSummary}>
+        <View style={[styles.hubActionRow, styles.hubActionRowCollapsed, styles.hubActionRowSecurity]}>
+          <TouchableOpacity
+            style={[styles.hubBtn, styles.hubBtnDuty, styles.hubBtnSecurityTile]}
+            onPress={() => openSecurityDutyModal('check-in')}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="log-in-outline" size={20} color="#93C5FD" />
+            <Text style={styles.hubBtnTextDuty}>Check in</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.hubBtn, styles.hubBtnDutyOut, styles.hubBtnSecurityTile]}
+            onPress={() => openSecurityDutyModal('check-out')}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="log-out-outline" size={20} color="#FCA5A5" />
+            <Text style={styles.hubBtnTextDutyOut}>Check out</Text>
+          </TouchableOpacity>
+          {showPatrol ? (
+            <TouchableOpacity
+              style={[styles.hubBtn, styles.hubBtnPatrol, styles.hubBtnSecurityTile]}
+              onPress={openPatrolForm}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="walk-outline" size={20} color={SEC.teal} />
+              <Text style={styles.hubBtnTextPatrol}>Patrol</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      </View>
+    );
+  };
+
   const renderHkCollapsedSummary = () =>
     renderCollapsedDutyActions(
       () => openHkDutyModal('check-in'),
@@ -2124,41 +2153,6 @@ export default function AdminDashboardScreen({ navigation, route }) {
           ) : (
             <SecurityShiftShortageBar metrics={hkShiftShortage} />
           )}
-
-          <Pressable
-            style={styles.dutyGridAccordion}
-            onPress={() => {
-              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-              setHkDutyGridOpen((o) => !o);
-            }}
-          >
-            <View style={styles.dutyGridAccordionLeft}>
-              <Ionicons name="grid-outline" size={18} color={HK.teal} />
-              <View>
-                <Text style={styles.dutyGridAccordionTitle}>Today&apos;s duty board</Text>
-                <Text style={styles.dutyGridAccordionSub}>
-                  Swipe in & out · Shift {activeHkShift}
-                </Text>
-              </View>
-            </View>
-            <Ionicons
-              name={hkDutyGridOpen ? 'chevron-up' : 'chevron-down'}
-              size={18}
-              color={SEC.textMuted}
-            />
-          </Pressable>
-
-          {hkDutyGridOpen ? (
-            <SecurityDutyDayGrid
-              sessions={hkGridSessions}
-              activeShift={activeHkShift}
-              onShiftChange={setActiveHkShift}
-              loading={hkDayLoading || onDutyHkLoading}
-              locationColumnLabel="Location"
-              theme="housekeeping"
-              emptyMessage="No check-ins for this shift today."
-            />
-          ) : null}
 
           <Pressable
             style={styles.dutyGridAccordion}
@@ -2202,13 +2196,33 @@ export default function AdminDashboardScreen({ navigation, route }) {
     </View>
   );
 
-  const renderSecurityCollapsedSummary = () =>
-    renderCollapsedDutyActions(
-      () => openSecurityDutyModal('check-in'),
-      () => openSecurityDutyModal('check-out'),
-    );
+  const renderSecurityCollapsedSummary = () => renderSecurityActionButtons();
+
+  const renderWaterFieldOpsActions = () => (
+    <View style={styles.securityCollapsedSummary}>
+      <View style={[styles.hubActionRow, styles.hubActionRowCollapsed]}>
+        <TouchableOpacity
+          style={[styles.hubBtn, styles.hubBtnWaterPrimary]}
+          onPress={openWaterRecordForm}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="water-outline" size={16} color={WATER.saveOnAccent} />
+          <Text style={styles.hubBtnWaterPrimaryText}>Record input</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.hubBtn, styles.hubBtnWaterSecondary]}
+          onPress={() => setWaterVendorOpen(true)}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="business-outline" size={16} color={WATER.accent} />
+          <Text style={[styles.hubBtnTextPatrol, { color: WATER.accent }]}>Add vendor</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
 
   const renderWaterCollapsedSummary = () => {
+    if (fieldOpsLimited) return renderWaterFieldOpsActions();
     const fillPct = Math.round(waterMetrics.tankFillPct);
     const band = waterMetrics.statusBand;
     const accent =
@@ -2266,6 +2280,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
 
   const renderSecurityDetails = () => (
     <View style={styles.securityExpandedShell}>
+      {renderSecurityActionButtons()}
       <View style={styles.premiumSecurityCard}>
         <View style={styles.securityBody}>
           {isStaffLoading ? (
@@ -2273,39 +2288,6 @@ export default function AdminDashboardScreen({ navigation, route }) {
           ) : (
             <SecurityShiftShortageBar metrics={securityShiftShortage} />
           )}
-
-          <Pressable
-            style={styles.dutyGridAccordion}
-            onPress={() => {
-              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-              setSecurityDutyGridOpen((o) => !o);
-            }}
-          >
-            <View style={styles.dutyGridAccordionLeft}>
-              <Ionicons name="grid-outline" size={18} color={SEC.teal} />
-              <View>
-                <Text style={styles.dutyGridAccordionTitle}>Today&apos;s duty board</Text>
-                <Text style={styles.dutyGridAccordionSub}>
-                  Swipe in & out · Shift {activeShift}
-                </Text>
-              </View>
-            </View>
-            <Ionicons
-              name={securityDutyGridOpen ? 'chevron-up' : 'chevron-down'}
-              size={18}
-              color={SEC.textMuted}
-            />
-          </Pressable>
-
-          {securityDutyGridOpen ? (
-            <SecurityDutyDayGrid
-              sessions={securityGridSessions}
-              activeShift={activeShift}
-              onShiftChange={setActiveShift}
-              loading={securityDayLoading || onDutyLoading}
-              emptyMessage="No check-ins for this shift today."
-            />
-          ) : null}
 
           <Pressable
             style={styles.dutyGridAccordion}
@@ -2356,6 +2338,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
 
   const closeSecurityDutyModal = useCallback(() => {
     setDeploymentPickerOpen(null);
+    setStaffPickerContext(null);
+    setDesignationPickerContext(null);
     setSecurityDutyModal(null);
     setDeploymentForm({ designation: '', name: '', location: '' });
     setStaffAttendancePhoto(null);
@@ -2376,6 +2360,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
       setDeploymentForm({ designation: '', name: '', location: '' });
       setStaffAttendancePhoto(null);
       setDeploymentPickerOpen(null);
+      setStaffPickerContext(null);
+      setDesignationPickerContext(null);
       setCheckoutDutySessionId(null);
     }
   }, [securityDutyModal]);
@@ -2385,6 +2371,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
       setDeploymentForm({ designation: '', name: '', location: '' });
       setStaffAttendancePhoto(null);
       setDeploymentPickerOpen(null);
+      setStaffPickerContext(null);
+      setDesignationPickerContext(null);
       setHkCheckoutSessionId(null);
       setRecordStaffType('Security');
     }
@@ -2435,6 +2423,9 @@ export default function AdminDashboardScreen({ navigation, route }) {
     if (!designation || !deployName || !deployLocation || !staffAttendancePhoto?.uri) {
       return null;
     }
+    if (!photoHasGps(staffAttendancePhoto)) {
+      return null;
+    }
     return {
       designation,
       staffName: deployName,
@@ -2448,6 +2439,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
     const designation = deploymentForm.designation.trim();
     const deployName = deploymentForm.name.trim();
     if (!deployName || !staffAttendancePhoto?.uri) return null;
+    if (!photoHasGps(staffAttendancePhoto)) return null;
     if (hkDutyModal === 'check-in' && !designation) return null;
     return {
       designation,
@@ -2461,8 +2453,10 @@ export default function AdminDashboardScreen({ navigation, route }) {
     if (!draft) {
       if (!deploymentForm.designation.trim() || !deploymentForm.name.trim() || !deploymentForm.location.trim()) {
         Alert.alert('Missing details', 'Please select designation, staff name, and location.');
-      } else {
+      } else if (!staffAttendancePhoto?.uri) {
         Alert.alert('Photo required', 'Take a verification photo with the camera.');
+      } else {
+        alertGpsRequired();
       }
       return;
     }
@@ -2477,8 +2471,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
     try {
       const photoPayload = {
         photo: draft.photo,
-        latitude: draft.photo.latitude ?? null,
-        longitude: draft.photo.longitude ?? null,
+        latitude: draft.photo.latitude,
+        longitude: draft.photo.longitude,
         accuracy: draft.photo.accuracy ?? null,
         capturedAt: draft.photo.capturedAt ?? null,
       };
@@ -2506,16 +2500,11 @@ export default function AdminDashboardScreen({ navigation, route }) {
           },
         ]);
         const shiftLine = session.entryShiftDisplay || '';
-        const gpsLine =
-          session.entryLatitude != null && session.entryLongitude != null
-            ? '\nGPS saved with photo.'
-            : '\nGPS not captured — enable location or retake photo.';
         Alert.alert(
           'Checked in',
-          `${draft.staffName} at ${draft.location}.${shiftLine ? `\n${shiftLine}` : ''}${gpsLine}\nTimer started — hours show after check-out.`,
+          `${draft.staffName} at ${draft.location}.${shiftLine ? `\n${shiftLine}` : ''}\nGPS saved with photo.\nTimer started — hours show after check-out.`,
         );
         await loadOnDutyForSection('Security');
-        if (securityDutyGridOpen) await loadSecurityDayBoard();
       } else {
         let sessionId = checkoutDutySessionId;
         if (!sessionId) {
@@ -2544,7 +2533,6 @@ export default function AdminDashboardScreen({ navigation, route }) {
             + gpsLine,
         );
         await loadOnDutyForSection('Security');
-        if (securityDutyGridOpen) await loadSecurityDayBoard();
       }
 
       closeSecurityDutyModal();
@@ -2557,38 +2545,348 @@ export default function AdminDashboardScreen({ navigation, route }) {
     }
   };
 
-  const saveSecurityStaff = async () => {
+  const selectDesignationFromPicker = useCallback((title) => {
+    setDeploymentForm((p) => ({ ...p, designation: title }));
+    setDeploymentPickerOpen(null);
+    setDesignationPickerContext(null);
+  }, []);
+
+  const openAddDesignationFromPicker = useCallback((context) => {
+    setDeploymentPickerOpen(null);
+    setAddDesignationContext(context);
+    setDesignationSaveError('');
+    setDesignationForm({ id: null, title: '' });
+    setAddDesignationOpen(true);
+  }, []);
+
+  const openEditDesignationFromPicker = useCallback((entry) => {
+    const context =
+      designationPickerContext
+      || (entry?.module === 'housekeeping' ? 'hk' : 'security');
+    setDeploymentPickerOpen(null);
+    setDesignationPickerContext(null);
+    setAddDesignationContext(context);
+    setDesignationSaveError('');
+    setDesignationForm({
+      id: entry?.id ?? null,
+      title: entry?.title || '',
+    });
+    setAddDesignationOpen(true);
+  }, [designationPickerContext]);
+
+  const closeAddDesignationModal = useCallback(() => {
+    setAddDesignationOpen(false);
+    setAddDesignationContext(null);
+    setDesignationSaveError('');
+    setDesignationForm({ id: null, title: '' });
+  }, []);
+
+  const requestRemoveDesignation = useCallback((entry) => {
+    if (!entry?.id) {
+      showToast({
+        type: 'error',
+        title: 'Cannot remove',
+        message: 'Designation list is still loading. Close the picker and try again.',
+      });
+      return;
+    }
+    setDeploymentPickerOpen(null);
+    setDesignationDeleteTarget(entry);
+  }, [showToast]);
+
+  const cancelRemoveDesignation = useCallback(() => {
+    if (!isDeletingDesignation) setDesignationDeleteTarget(null);
+  }, [isDeletingDesignation]);
+
+  const confirmRemoveDesignation = useCallback(async () => {
+    const entry = designationDeleteTarget;
+    if (!entry?.id || isDeletingDesignation) return;
+
+    setIsDeletingDesignation(true);
     try {
-      if (!staffForm.name) {
-        Alert.alert('Error', 'Please enter staff name');
+      const accessToken = (await ensureValidAccessToken()) || token;
+      if (!accessToken) {
+        showToast({ type: 'error', title: 'Not signed in', message: 'Please sign in again and retry.' });
+        return;
+      }
+      await deleteDesignation(
+        accessToken,
+        String(entry.id),
+        entry.module || designationApiModule(designationPickerContext ?? 'security'),
+      );
+      if (deploymentForm.designation?.trim() === entry.title?.trim()) {
+        setDeploymentForm((p) => ({ ...p, designation: '' }));
+      }
+      setDesignationDeleteTarget(null);
+      setDesignationPickerContext(null);
+      await refreshDesignations();
+      showToast({
+        type: 'success',
+        title: 'Designation removed',
+        message: `${entry.title} was removed from the list.`,
+      });
+    } catch (err) {
+      showToast({
+        type: 'error',
+        title: 'Could not remove',
+        message: err?.message || 'Failed to remove designation.',
+      });
+    } finally {
+      setIsDeletingDesignation(false);
+    }
+  }, [
+    designationDeleteTarget,
+    isDeletingDesignation,
+    token,
+    deploymentForm.designation,
+    refreshDesignations,
+    showToast,
+  ]);
+
+  const saveDesignation = async () => {
+    setDesignationSaveError('');
+    const title = designationForm.title?.trim();
+    if (!title) {
+      const msg = 'Please enter a designation title.';
+      setDesignationSaveError(msg);
+      showToast({ type: 'warning', title: 'Missing title', message: msg });
+      return;
+    }
+
+    const designationId = designationForm.id ? String(designationForm.id) : null;
+    const isEdit = Boolean(designationId);
+    if (isEdit && !/^[0-9a-f-]{36}$/i.test(designationId)) {
+      const msg = 'Designation id is missing. Close and add again.';
+      setDesignationSaveError(msg);
+      showToast({ type: 'error', title: 'Cannot update', message: msg });
+      return;
+    }
+
+    const module = designationApiModule(addDesignationContext ?? designationPickerContext ?? 'security');
+    const payload = { module, title };
+
+    setIsSavingDesignation(true);
+    try {
+      const accessToken = (await ensureValidAccessToken()) || token;
+      if (!accessToken) {
+        const msg = 'Please sign in again and retry.';
+        setDesignationSaveError(msg);
+        showToast({ type: 'error', title: 'Not signed in', message: msg });
         return;
       }
 
-      await postStaffMember(token, staffForm);
+      const saved = isEdit
+        ? await putDesignation(accessToken, designationId, payload)
+        : await postDesignation(accessToken, payload);
+      const savedTitle = (saved?.title ?? title).trim();
 
-      Alert.alert('Success', 'Staff member added successfully');
-      setAddStaffOpen(false);
-      setStaffForm({ name: '', badgeNumber: '', role: 'SECURITY_GUARD', phone: '' });
-      refreshSecurityData();
+      if (addDesignationContext === 'security' || addDesignationContext === 'hk') {
+        setDeploymentForm((p) => ({ ...p, designation: savedTitle }));
+      }
+
+      closeAddDesignationModal();
+      await refreshDesignations();
+      showToast({
+        type: 'success',
+        title: isEdit ? 'Designation updated' : 'Designation added',
+        message: isEdit
+          ? `${savedTitle} has been updated.`
+          : `${savedTitle} is now available for check-in.`,
+      });
     } catch (err) {
-      console.error('Save staff failed:', err);
-      Alert.alert('Error', 'Could not add staff member');
+      const msg = err?.message || 'Failed to save designation.';
+      setDesignationSaveError(msg);
+      showToast({ type: 'error', title: 'Could not save', message: msg });
+    } finally {
+      setIsSavingDesignation(false);
     }
   };
 
-  const pickPatrolPhotoFromLibrary = async () => {
+  const openAddStaffFromDutyPicker = useCallback((context) => {
+    setDeploymentPickerOpen(null);
+    setPatrolPickerOpen(false);
+    setAddStaffContext(context);
+    setStaffSaveError('');
+    setStaffForm({
+      id: null,
+      name: '',
+      badgeNumber: '',
+      role: context === 'hk' ? 'HOUSEKEEPING' : 'SECURITY_GUARD',
+      phone: '',
+    });
+    setAddStaffOpen(true);
+  }, []);
+
+  const openEditStaffFromPicker = useCallback((member) => {
+    const context =
+      staffPickerContext
+      || (staffRoleMatchesAllowed(member?.role, HK_STAFF_ROLES) ? 'hk' : 'security');
+    setDeploymentPickerOpen(null);
+    setStaffPickerContext(null);
+    setAddStaffContext(context);
+    setStaffSaveError('');
+    setStaffForm({
+      id: member?.id ?? member?.Id ?? null,
+      name: member?.name || '',
+      badgeNumber: member?.badgeNumber ?? '',
+      role: member?.role || (context === 'hk' ? 'HOUSEKEEPING' : 'SECURITY_GUARD'),
+      phone: member?.phone ?? '',
+    });
+    setAddStaffOpen(true);
+  }, [staffPickerContext]);
+
+  const closeAddStaffModal = useCallback(() => {
+    setAddStaffOpen(false);
+    setAddStaffContext(null);
+    setStaffSaveError('');
+    setStaffForm({
+      id: null,
+      name: '',
+      badgeNumber: '',
+      role: 'SECURITY_GUARD',
+      phone: '',
+    });
+  }, []);
+
+  const requestRemoveStaff = useCallback((member) => {
+    if (!member?.id) {
+      showToast({
+        type: 'error',
+        title: 'Cannot remove',
+        message: 'Staff record id is missing. Refresh and try again.',
+      });
+      return;
+    }
+    setDeploymentPickerOpen(null);
+    setStaffDeleteTarget(member);
+  }, [showToast]);
+
+  const cancelRemoveStaff = useCallback(() => {
+    if (!isDeletingStaff) setStaffDeleteTarget(null);
+  }, [isDeletingStaff]);
+
+  const confirmRemoveStaff = useCallback(async () => {
+    const member = staffDeleteTarget;
+    if (!member?.id || isDeletingStaff) return;
+
+    setIsDeletingStaff(true);
     try {
-      const photo = await pickGeoPhotoFromLibrary();
-      if (photo) setPatrolForm((p) => ({ ...p, photos: [photo] }));
+      const accessToken = (await ensureValidAccessToken()) || token;
+      if (!accessToken) {
+        showToast({ type: 'error', title: 'Not signed in', message: 'Please sign in again and retry.' });
+        return;
+      }
+      await deleteStaffMember(accessToken, String(member.id));
+      if (deploymentForm.name?.trim() === member.name?.trim()) {
+        setDeploymentForm((p) => ({ ...p, name: '' }));
+      }
+      setStaffDeleteTarget(null);
+      setDeploymentPickerOpen(null);
+      setStaffPickerContext(null);
+      await refreshStaffRoster();
+      if (expandedId === 'Security') refreshSecurityData();
+      showToast({
+        type: 'success',
+        title: 'Staff removed',
+        message: `${member.name} was removed from the roster.`,
+      });
     } catch (err) {
-      console.log('Error picking patrol photo:', err);
-      Alert.alert('Photos', err?.message || 'Could not open photo library.');
+      showToast({
+        type: 'error',
+        title: 'Could not remove',
+        message: err?.message || 'Failed to remove staff.',
+      });
+    } finally {
+      setIsDeletingStaff(false);
+    }
+  }, [
+    staffDeleteTarget,
+    isDeletingStaff,
+    token,
+    deploymentForm.name,
+    expandedId,
+    refreshStaffRoster,
+    refreshSecurityData,
+    showToast,
+  ]);
+
+  const saveSecurityStaff = async () => {
+    setStaffSaveError('');
+    const name = staffForm.name?.trim();
+    if (!name) {
+      const msg = 'Please enter the staff member\'s full name.';
+      setStaffSaveError(msg);
+      showToast({ type: 'warning', title: 'Missing name', message: msg });
+      return;
+    }
+    if (!isValidIndianMobile(staffForm.phone)) {
+      const msg = 'Enter a valid 10-digit Indian mobile number, or clear the mobile field.';
+      setStaffSaveError(msg);
+      showToast({ type: 'warning', title: 'Invalid phone', message: msg });
+      return;
+    }
+
+    const staffId = staffForm.id ? String(staffForm.id) : null;
+    const isEdit = Boolean(staffId);
+    if (isEdit && !/^[0-9a-f-]{36}$/i.test(staffId)) {
+      const msg = 'Staff record id is missing. Close and add this person again.';
+      setStaffSaveError(msg);
+      showToast({ type: 'error', title: 'Cannot update', message: msg });
+      return;
+    }
+
+    const role =
+      staffForm.role
+      || (addStaffContext === 'hk' ? 'HOUSEKEEPING' : 'SECURITY_GUARD');
+    const payload = {
+      name,
+      badgeNumber: staffForm.badgeNumber?.trim() || null,
+      role,
+      phone: normalizeIndianMobile(staffForm.phone),
+    };
+
+    setIsSavingStaff(true);
+    try {
+      const accessToken = (await ensureValidAccessToken()) || token;
+      if (!accessToken) {
+        const msg = 'Please sign in again and retry.';
+        setStaffSaveError(msg);
+        showToast({ type: 'error', title: 'Not signed in', message: msg });
+        return;
+      }
+
+      const saved = isEdit
+        ? await putStaffMember(accessToken, staffId, payload)
+        : await postStaffMember(accessToken, payload);
+      const savedName = (saved?.name ?? name).trim();
+
+      if (addStaffContext === 'security' || addStaffContext === 'hk') {
+        setDeploymentForm((p) => ({ ...p, name: savedName }));
+      }
+
+      closeAddStaffModal();
+      await refreshStaffRoster();
+      if (expandedId === 'Security') refreshSecurityData();
+      showToast({
+        type: 'success',
+        title: isEdit ? 'Staff updated' : 'Staff added',
+        message: isEdit
+          ? `${savedName} has been updated on the roster.`
+          : `${savedName} is now available for check-in.`,
+      });
+    } catch (err) {
+      console.error('Save staff failed:', err);
+      const msg = err?.message || 'Failed to save staff member.';
+      setStaffSaveError(msg);
+      showToast({ type: 'error', title: 'Could not save', message: msg });
+    } finally {
+      setIsSavingStaff(false);
     }
   };
 
   const pickPatrolPhotoFromCamera = async () => {
     try {
-      const photo = await pickGeoPhotoFromCamera();
+      const photo = await pickGeoPhotoForDuty();
       if (photo) setPatrolForm((p) => ({ ...p, photos: [photo] }));
     } catch (err) {
       console.log('Error taking patrol photo:', err);
@@ -2639,6 +2937,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setExpandedId('Security');
     setHkDutyModal(null);
+    setStaffPickerContext(null);
+    setDesignationPickerContext(null);
     setSecurityDutyModal(mode);
     setCheckoutDutySessionId(null);
     setDeploymentForm({ designation: '', name: '', location: '' });
@@ -2688,8 +2988,46 @@ export default function AdminDashboardScreen({ navigation, route }) {
     [findOpenHkDutySessionLocal, token],
   );
 
+  const selectStaffNameFromPicker = useCallback((name) => {
+    if (securityDutyModal === 'check-in' && isStaffOnDuty(name, onDutySessions)) {
+      showToast({
+        type: 'warning',
+        title: 'Already on duty',
+        message: `${name} is already checked in. Check them out first.`,
+      });
+      return;
+    }
+    if (hkDutyModal === 'check-in' && isStaffOnDuty(name, onDutyHkSessions)) {
+      showToast({
+        type: 'warning',
+        title: 'Already on duty',
+        message: `${name} is already checked in. Check them out first.`,
+      });
+      return;
+    }
+    if (securityDutyModal === 'check-out') {
+      void applyCheckoutStaffSelection(name);
+    } else if (hkDutyModal === 'check-out') {
+      void applyHkCheckoutStaffSelection(name);
+    } else {
+      setDeploymentForm((p) => ({ ...p, name }));
+    }
+    setDeploymentPickerOpen(null);
+    setStaffPickerContext(null);
+  }, [
+    securityDutyModal,
+    hkDutyModal,
+    onDutySessions,
+    onDutyHkSessions,
+    applyCheckoutStaffSelection,
+    applyHkCheckoutStaffSelection,
+    showToast,
+  ]);
+
   const closeHkDutyModal = useCallback(() => {
     setDeploymentPickerOpen(null);
+    setStaffPickerContext(null);
+    setDesignationPickerContext(null);
     setHkDutyModal(null);
     setDeploymentForm({ designation: '', name: '', location: '' });
     setStaffAttendancePhoto(null);
@@ -2701,6 +3039,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setExpandedId('Workforce');
     setSecurityDutyModal(null);
+    setStaffPickerContext(null);
+    setDesignationPickerContext(null);
     setRecordStaffType('FM_HK');
     setHkDutyModal(mode);
     setHkCheckoutSessionId(null);
@@ -2725,8 +3065,10 @@ export default function AdminDashboardScreen({ navigation, route }) {
             ? 'Please select staff on duty.'
             : 'Please select designation and staff name.',
         );
-      } else {
+      } else if (!staffAttendancePhoto?.uri) {
         Alert.alert('Photo required', 'Take a verification photo with the camera.');
+      } else {
+        alertGpsRequired();
       }
       return;
     }
@@ -2741,8 +3083,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
     try {
       const photoPayload = {
         photo: draft.photo,
-        latitude: draft.photo.latitude ?? null,
-        longitude: draft.photo.longitude ?? null,
+        latitude: draft.photo.latitude,
+        longitude: draft.photo.longitude,
         accuracy: draft.photo.accuracy ?? null,
         capturedAt: draft.photo.capturedAt ?? null,
       };
@@ -2771,7 +3113,6 @@ export default function AdminDashboardScreen({ navigation, route }) {
           `${draft.staffName} is on duty.${shiftLine ? `\n${shiftLine}` : ''}\nTimer started — hours show after check-out.`,
         );
         await loadOnDutyForSection('Workforce');
-        if (hkDutyGridOpen) await loadHkDayBoard();
       } else {
         let sessionId = hkCheckoutSessionId;
         if (!sessionId) {
@@ -2790,7 +3131,6 @@ export default function AdminDashboardScreen({ navigation, route }) {
           || formatDutyDurationMinutes(session.durationMinutes);
         Alert.alert('Checked out', `${draft.staffName} was on site for ${present}.`);
         await loadOnDutyForSection('Workforce');
-        if (hkDutyGridOpen) await loadHkDayBoard();
       }
 
       closeHkDutyModal();
@@ -2827,7 +3167,6 @@ export default function AdminDashboardScreen({ navigation, route }) {
 
   const renderExpandedBody = (section) => {
     if (section.id === 'promotions') return renderPromotionsDetails();
-    if (section.id === 'mygate') return renderMyGateDetails();
     return renderModulePreview(section);
   };
 
@@ -2873,38 +3212,47 @@ export default function AdminDashboardScreen({ navigation, route }) {
       >
         <View style={[styles.cardsStack, { width: screenWidth - CONTENT_PAD * 2 }]}>
           {visibleDashboardSections.map((section, index) => {
-            const expanded = expandedId === section.id;
+            const expandable = permissions?.canExpandModule?.(section.id) !== false;
+            const expanded = expandable && expandedId === section.id;
             const isLast = index === visibleDashboardSections.length - 1;
+            const fieldOpsCard =
+              fieldOpsLimited &&
+              (section.id === 'Security' ||
+                section.id === 'Workforce' ||
+                section.id === 'WaterTracking');
+
+            let body = null;
+            if (fieldOpsCard) {
+              if (section.id === 'Security') body = renderSecurityCollapsedSummary();
+              else if (section.id === 'Workforce') body = renderHkCollapsedSummary();
+              else if (section.id === 'WaterTracking') body = renderWaterCollapsedSummary();
+            } else if (expanded) {
+              if (section.id === 'Security') body = renderSecurityDetails();
+              else if (section.id === 'Workforce') body = renderHousekeepingDetails();
+              else if (section.id === 'rentals') body = renderRentalsDetails();
+              else if (section.id === 'amc') body = renderAmcDetails();
+              else if (section.id === 'WaterTracking') body = renderWaterDetails();
+              else if (section.id === 'Expenses') body = renderExpensesDetails();
+              else body = renderExpandedBody(section);
+            } else if (section.id === 'Security') {
+              body = renderSecurityCollapsedSummary();
+            } else if (section.id === 'Workforce') {
+              body = renderHkCollapsedSummary();
+            } else if (section.id === 'WaterTracking') {
+              body = renderWaterCollapsedSummary();
+            }
+
             return (
               <FloatingModuleCard
                 key={section.id}
                 section={section}
                 index={index}
                 expanded={expanded}
+                expandable={expandable}
                 onPress={() => toggle(section.id)}
                 isLast={isLast}
               >
-                {expanded
-                  ? section.id === 'Security'
-                    ? renderSecurityDetails()
-                    : section.id === 'Workforce'
-                      ? renderHousekeepingDetails()
-                      : section.id === 'rentals'
-                      ? renderRentalsDetails()
-                      : section.id === 'amc'
-                        ? renderAmcDetails()
-                        : section.id === 'WaterTracking'
-                          ? renderWaterDetails()
-                          : section.id === 'Expenses'
-                            ? renderExpensesDetails()
-                            : renderExpandedBody(section)
-                  : section.id === 'Security'
-                    ? renderSecurityCollapsedSummary()
-                    : section.id === 'Workforce'
-                      ? renderHkCollapsedSummary()
-                      : section.id === 'WaterTracking'
-                        ? renderWaterCollapsedSummary()
-                        : null}
+                {body}
               </FloatingModuleCard>
             );
           })}
@@ -3057,24 +3405,14 @@ export default function AdminDashboardScreen({ navigation, route }) {
               value={patrolForm.notes}
               onChangeText={(v) => setPatrolForm((p) => ({ ...p, notes: v }))}
             />
-            <View style={styles.deploymentPhotoRow}>
-              <TouchableOpacity
-                style={styles.secUploadBtn}
-                activeOpacity={0.85}
-                onPress={pickPatrolPhotoFromCamera}
-              >
-                <Ionicons name="camera-outline" size={18} color={SEC.teal} />
-                <Text style={styles.secUploadBtnText}>Camera</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.secUploadBtn}
-                activeOpacity={0.85}
-                onPress={pickPatrolPhotoFromLibrary}
-              >
-                <Ionicons name="images-outline" size={18} color={SEC.teal} />
-                <Text style={styles.secUploadBtnText}>Gallery</Text>
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity
+              style={[styles.secUploadBtn, styles.dutyUploadBtn]}
+              activeOpacity={0.85}
+              onPress={pickPatrolPhotoFromCamera}
+            >
+              <Ionicons name="camera-outline" size={18} color={SEC.teal} />
+              <Text style={styles.secUploadBtnText}>Take photo</Text>
+            </TouchableOpacity>
             {patrolForm.photos.length > 0 && patrolForm.photos[0]?.uri ? (
               <View style={styles.secPhotoPreviewWrap}>
                 <Image source={{ uri: patrolForm.photos[0].uri }} style={styles.patrolPhotoPreview} />
@@ -3086,74 +3424,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
             ) : null}
       </SecurityFormModal>
 
-      <Modal
-        visible={addStaffOpen}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setAddStaffOpen(false)}
-        presentationStyle="overFullScreen"
-        statusBarTranslucent={Platform.OS === 'android'}
-      >
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalBg}>
-          <Pressable style={styles.secModalBackdrop} onPress={() => setAddStaffOpen(false)} />
-          <View style={styles.secModalSheet}>
-            <View style={styles.secModalHandle} />
-            <View style={styles.modalHeader}>
-              <View style={styles.secModalTitleBlock}>
-                <Text style={styles.secModalTitle}>Add staff member</Text>
-              </View>
-              <TouchableOpacity onPress={() => setAddStaffOpen(false)} style={styles.closeBtn}>
-                <Ionicons name="close" size={22} color={SEC.textMuted} />
-              </TouchableOpacity>
-            </View>
-            <ScrollView showsVerticalScrollIndicator={false}>
-              <TextInput
-                style={styles.secInput}
-                placeholder="Full name"
-                placeholderTextColor={SEC_PLACEHOLDER}
-                value={staffForm.name}
-                onChangeText={(v) => setStaffForm((p) => ({ ...p, name: v }))}
-              />
-              <TextInput
-                style={styles.secInput}
-                placeholder="Badge / ID number"
-                placeholderTextColor={SEC_PLACEHOLDER}
-                value={staffForm.badgeNumber}
-                onChangeText={(v) => setStaffForm((p) => ({ ...p, badgeNumber: v }))}
-              />
-              <TextInput
-                style={styles.secInput}
-                placeholder="Phone number"
-                placeholderTextColor={SEC_PLACEHOLDER}
-                keyboardType="phone-pad"
-                value={staffForm.phone}
-                onChangeText={(v) => setStaffForm((p) => ({ ...p, phone: v }))}
-              />
-
-              <View style={styles.rolePickerRow}>
-                {['SECURITY_GUARD', 'SUPERVISOR', 'SECURITY_OFFICER'].map((r) => (
-                  <TouchableOpacity
-                    key={r}
-                    style={[styles.secRoleChip, staffForm.role === r && styles.secRoleChipActive]}
-                    onPress={() => setStaffForm((p) => ({ ...p, role: r }))}
-                  >
-                    <Text style={[styles.secRoleChipText, staffForm.role === r && styles.secRoleChipTextActive]}>
-                      {r.replace(/_/g, ' ')}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <TouchableOpacity style={styles.secSaveBtn} activeOpacity={0.9} onPress={saveSecurityStaff}>
-                <Text style={styles.secSaveBtnText}>Add to roster</Text>
-              </TouchableOpacity>
-            </ScrollView>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
       <SecurityFormModal
-        visible={securityDutyModal != null}
+        visible={securityDutyModal != null && !addStaffOpen && !addDesignationOpen}
         onClose={closeSecurityDutyModal}
         title={securityDutyModal === 'check-out' ? 'Check out' : 'Check in'}
         maxHeight="96%"
@@ -3235,7 +3507,10 @@ export default function AdminDashboardScreen({ navigation, route }) {
                   <TouchableOpacity
                     style={[styles.secSelect, styles.dutyFormSelect]}
                     activeOpacity={0.85}
-                    onPress={() => setDeploymentPickerOpen('designation')}
+                    onPress={() => {
+                      setDesignationPickerContext('security');
+                      setDeploymentPickerOpen('designation');
+                    }}
                   >
                     <Text
                       style={[
@@ -3253,13 +3528,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
                     style={[styles.secSelect, styles.dutyFormSelect]}
                     activeOpacity={0.85}
                     onPress={() => {
-                      if (securityCheckInNameOptions.length === 0) {
-                        Alert.alert(
-                          'Everyone on duty',
-                          'All listed staff are already checked in. Check someone out first.',
-                        );
-                        return;
-                      }
+                      setStaffPickerContext('security');
                       setDeploymentPickerOpen('name');
                     }}
                   >
@@ -3320,7 +3589,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
       </SecurityFormModal>
 
       <SecurityFormModal
-        visible={hkDutyModal != null}
+        visible={hkDutyModal != null && !addStaffOpen && !addDesignationOpen}
         onClose={closeHkDutyModal}
         title={hkDutyModal === 'check-out' ? 'Check out' : 'Check in'}
         maxHeight="96%"
@@ -3376,7 +3645,10 @@ export default function AdminDashboardScreen({ navigation, route }) {
                   <TouchableOpacity
                     style={[styles.secSelect, styles.dutyFormSelect]}
                     activeOpacity={0.85}
-                    onPress={() => setDeploymentPickerOpen('designation')}
+                    onPress={() => {
+                      setDesignationPickerContext('hk');
+                      setDeploymentPickerOpen('designation');
+                    }}
                   >
                     <Text
                       style={[
@@ -3394,13 +3666,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
                     style={[styles.secSelect, styles.dutyFormSelect]}
                     activeOpacity={0.85}
                     onPress={() => {
-                      if (hkCheckInNameOptions.length === 0) {
-                        Alert.alert(
-                          'Everyone on duty',
-                          'All listed staff are already checked in. Check someone out first.',
-                        );
-                        return;
-                      }
+                      setStaffPickerContext('hk');
                       setDeploymentPickerOpen('name');
                     }}
                   >
@@ -3444,19 +3710,25 @@ export default function AdminDashboardScreen({ navigation, route }) {
       </SecurityFormModal>
 
       <Modal
-        visible={activePickerField != null}
+        visible={activePickerField != null && !addStaffOpen && !addDesignationOpen}
         transparent
         animationType="fade"
         onRequestClose={() => {
           setDeploymentPickerOpen(null);
+          setStaffPickerContext(null);
+          setDesignationPickerContext(null);
           setPatrolPickerOpen(false);
         }}
+        presentationStyle="overFullScreen"
+        statusBarTranslucent={Platform.OS === 'android'}
       >
         <View style={styles.secModalOverlay}>
           <Pressable
             style={styles.secModalBackdrop}
             onPress={() => {
               setDeploymentPickerOpen(null);
+              setStaffPickerContext(null);
+              setDesignationPickerContext(null);
               setPatrolPickerOpen(false);
             }}
           />
@@ -3473,7 +3745,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
               <TouchableOpacity
                 onPress={() => {
                   setDeploymentPickerOpen(null);
-                  setHkPickerOpen(null);
+                  setStaffPickerContext(null);
+                  setDesignationPickerContext(null);
                   setPatrolPickerOpen(false);
                 }}
                 style={styles.closeBtn}
@@ -3486,38 +3759,458 @@ export default function AdminDashboardScreen({ navigation, route }) {
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             >
-              {activePickerOptions.map((opt) => (
-                <TouchableOpacity
-                  key={opt}
-                  style={styles.secPickerRow}
-                  activeOpacity={0.7}
-                  onPress={() => {
-                    if (recordPatrolOpen && patrolPickerOpen) {
-                      setPatrolForm((p) => ({ ...p, staffId: opt }));
-                      setPatrolPickerOpen(false);
-                    } else {
-                      if (deploymentPickerOpen === 'designation') {
-                        setDeploymentForm((p) => ({ ...p, designation: opt }));
-                      } else if (deploymentPickerOpen === 'location') {
-                        setDeploymentForm((p) => ({ ...p, location: opt }));
-                      } else if (deploymentPickerOpen === 'name') {
-                        if (securityDutyModal === 'check-out') {
-                          void applyCheckoutStaffSelection(opt);
-                        } else if (hkDutyModal === 'check-out') {
-                          void applyHkCheckoutStaffSelection(opt);
-                        } else {
-                          setDeploymentForm((p) => ({ ...p, name: opt }));
-                        }
-                      }
+              {showDesignationManagePicker ? (
+                <>
+                  {designationsLoading && designationPickerEntries.length === 0 ? (
+                    <View style={styles.secPickerRow}>
+                      <ActivityIndicator size="small" color={SEC.teal} />
+                      <Text style={[styles.secPickerRowText, { marginLeft: 10 }]}>
+                        Loading designations…
+                      </Text>
+                    </View>
+                  ) : null}
+                  <TouchableOpacity
+                    style={[styles.secPickerRow, styles.secPickerRowAddNew]}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      const ctx =
+                        designationPickerContext ?? (hkDutyModal != null ? 'hk' : 'security');
                       setDeploymentPickerOpen(null);
-                    }
-                  }}
-                >
-                  <Text style={styles.secPickerRowText}>{opt}</Text>
-                </TouchableOpacity>
-              ))}
+                      setDesignationPickerContext(null);
+                      openAddDesignationFromPicker(ctx);
+                    }}
+                  >
+                    <Ionicons name="add-circle-outline" size={18} color={SEC.teal} style={{ marginRight: 8 }} />
+                    <Text style={[styles.secPickerRowText, styles.secPickerRowTextAddNew]}>
+                      {ADD_NEW_DESIGNATION_LABEL}
+                    </Text>
+                  </TouchableOpacity>
+                  {designationPickerEntries.map((entry) => {
+                    const canManage = Boolean(entry?.id);
+                    return (
+                      <View key={String(entry.id)} style={styles.secPickerRow}>
+                        <Pressable
+                          style={({ pressed }) => [
+                            styles.secPickerRowMain,
+                            pressed && styles.secPickerRowPressed,
+                          ]}
+                          onPress={() => selectDesignationFromPicker(entry.title)}
+                        >
+                          <Text style={styles.secPickerRowText} numberOfLines={1}>
+                            {entry.title}
+                          </Text>
+                        </Pressable>
+                        {canManage ? (
+                          <>
+                            <Pressable
+                              style={({ pressed }) => [
+                                styles.secPickerIconBtn,
+                                pressed && styles.secPickerIconBtnPressed,
+                              ]}
+                              onPress={() => openEditDesignationFromPicker(entry)}
+                              hitSlop={8}
+                              accessibilityRole="button"
+                              accessibilityLabel={`Edit ${entry.title}`}
+                            >
+                              <Ionicons name="pencil-outline" size={18} color={SEC.teal} />
+                            </Pressable>
+                            <Pressable
+                              style={({ pressed }) => [
+                                styles.secPickerIconBtn,
+                                pressed && styles.secPickerIconBtnPressed,
+                              ]}
+                              onPress={() => requestRemoveDesignation(entry)}
+                              hitSlop={8}
+                              accessibilityRole="button"
+                              accessibilityLabel={`Remove ${entry.title}`}
+                            >
+                              <Ionicons name="trash-outline" size={18} color={SEC.red} />
+                            </Pressable>
+                          </>
+                        ) : null}
+                      </View>
+                    );
+                  })}
+                </>
+              ) : showStaffManagePicker ? (
+                <>
+                  <TouchableOpacity
+                    style={[styles.secPickerRow, styles.secPickerRowAddNew]}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      const ctx =
+                        staffPickerContext ?? (hkDutyModal != null ? 'hk' : 'security');
+                      setDeploymentPickerOpen(null);
+                      setStaffPickerContext(null);
+                      openAddStaffFromDutyPicker(ctx);
+                    }}
+                  >
+                    <Ionicons name="person-add-outline" size={18} color={SEC.teal} style={{ marginRight: 8 }} />
+                    <Text style={[styles.secPickerRowText, styles.secPickerRowTextAddNew]}>
+                      {ADD_NEW_STAFF_LABEL}
+                    </Text>
+                  </TouchableOpacity>
+                  {staffPickerEntries.map((member) => {
+                    const onDuty =
+                      staffPickerContext === 'hk'
+                        ? isStaffOnDuty(member.name, onDutyHkSessions)
+                        : isStaffOnDuty(member.name, onDutySessions);
+                    return (
+                    <View key={member.id} style={styles.secPickerRow}>
+                      <Pressable
+                        style={({ pressed }) => [
+                          styles.secPickerRowMain,
+                          pressed && styles.secPickerRowPressed,
+                          onDuty && styles.secPickerRowOnDuty,
+                        ]}
+                        onPress={() => selectStaffNameFromPicker(member.name)}
+                      >
+                        <Text style={styles.secPickerRowText} numberOfLines={1}>
+                          {member.name}
+                          {onDuty ? ' · on duty' : ''}
+                        </Text>
+                        {member.phone ? (
+                          <Text style={styles.secPickerRowSub} numberOfLines={1}>
+                            {member.phone}
+                          </Text>
+                        ) : null}
+                      </Pressable>
+                      <Pressable
+                        style={({ pressed }) => [
+                          styles.secPickerIconBtn,
+                          pressed && styles.secPickerIconBtnPressed,
+                        ]}
+                        onPress={() => openEditStaffFromPicker(member)}
+                        hitSlop={8}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Edit ${member.name}`}
+                      >
+                        <Ionicons name="pencil-outline" size={18} color={SEC.teal} />
+                      </Pressable>
+                      <Pressable
+                        style={({ pressed }) => [
+                          styles.secPickerIconBtn,
+                          pressed && styles.secPickerIconBtnPressed,
+                        ]}
+                        onPress={() => requestRemoveStaff(member)}
+                        hitSlop={8}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Remove ${member.name}`}
+                      >
+                        <Ionicons name="trash-outline" size={18} color={SEC.red} />
+                      </Pressable>
+                    </View>
+                    );
+                  })}
+                </>
+              ) : (
+                activePickerOptions.map((opt) => {
+                  const isAddNewStaff = opt === ADD_NEW_STAFF_SENTINEL;
+                  const isAddNewDesignation = opt === ADD_NEW_DESIGNATION_SENTINEL;
+                  const isAddNew = isAddNewStaff || isAddNewDesignation;
+                  return (
+                    <TouchableOpacity
+                      key={isAddNew ? opt : opt}
+                      style={[styles.secPickerRow, isAddNew && styles.secPickerRowAddNew]}
+                      activeOpacity={0.7}
+                      onPress={() => {
+                        if (recordPatrolOpen && patrolPickerOpen) {
+                          setPatrolForm((p) => ({ ...p, staffId: opt }));
+                          setPatrolPickerOpen(false);
+                        } else if (isAddNewStaff) {
+                          const ctx =
+                            staffPickerContext ?? (hkDutyModal != null ? 'hk' : 'security');
+                          setDeploymentPickerOpen(null);
+                          setStaffPickerContext(null);
+                          openAddStaffFromDutyPicker(ctx);
+                        } else if (isAddNewDesignation) {
+                          const ctx =
+                            designationPickerContext ?? (hkDutyModal != null ? 'hk' : 'security');
+                          setDeploymentPickerOpen(null);
+                          setDesignationPickerContext(null);
+                          openAddDesignationFromPicker(ctx);
+                        } else {
+                          if (deploymentPickerOpen === 'designation') {
+                            selectDesignationFromPicker(opt);
+                            return;
+                          } else if (deploymentPickerOpen === 'location') {
+                            setDeploymentForm((p) => ({ ...p, location: opt }));
+                          } else if (deploymentPickerOpen === 'name') {
+                            selectStaffNameFromPicker(opt);
+                            return;
+                          }
+                          setDeploymentPickerOpen(null);
+                        }
+                      }}
+                    >
+                      {isAddNewStaff ? (
+                        <Ionicons name="person-add-outline" size={18} color={SEC.teal} style={{ marginRight: 8 }} />
+                      ) : null}
+                      {isAddNewDesignation ? (
+                        <Ionicons name="add-circle-outline" size={18} color={SEC.teal} style={{ marginRight: 8 }} />
+                      ) : null}
+                      <Text style={[styles.secPickerRowText, isAddNew && styles.secPickerRowTextAddNew]}>
+                        {isAddNewStaff
+                          ? ADD_NEW_STAFF_LABEL
+                          : isAddNewDesignation
+                            ? ADD_NEW_DESIGNATION_LABEL
+                            : opt}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })
+              )}
             </ScrollView>
           </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={addStaffOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={closeAddStaffModal}
+        presentationStyle="overFullScreen"
+        statusBarTranslucent={Platform.OS === 'android'}
+      >
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalBg}>
+          <Pressable style={styles.secModalBackdrop} onPress={closeAddStaffModal} />
+          <View style={styles.secModalSheet}>
+            <View style={styles.secModalHandle} />
+            <View style={styles.modalHeader}>
+              <View style={styles.secModalTitleBlock}>
+                <Text style={styles.secModalTitle}>
+                  {staffForm.id
+                    ? addStaffContext === 'hk'
+                      ? 'Edit housekeeping staff'
+                      : 'Edit security staff'
+                    : addStaffContext === 'hk'
+                      ? 'Add housekeeping staff'
+                      : addStaffContext === 'security'
+                        ? 'Add security staff'
+                        : 'Add staff member'}
+                </Text>
+                <Text style={styles.secModalHint}>
+                  Name and contact only — pick designation when you check in.
+                </Text>
+              </View>
+              <TouchableOpacity onPress={closeAddStaffModal} style={styles.closeBtn}>
+                <Ionicons name="close" size={22} color={SEC.textMuted} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <Text style={[styles.secFieldLabel, styles.secFieldLabelFirst]}>Full name *</Text>
+              <TextInput
+                style={styles.secInput}
+                placeholder="Enter full name"
+                placeholderTextColor={SEC_PLACEHOLDER}
+                value={staffForm.name}
+                onChangeText={(v) => setStaffForm((p) => ({ ...p, name: v }))}
+                autoCapitalize="words"
+              />
+              <Text style={styles.secFieldLabel}>Badge / ID number</Text>
+              <TextInput
+                style={styles.secInput}
+                placeholder="Optional"
+                placeholderTextColor={SEC_PLACEHOLDER}
+                value={staffForm.badgeNumber}
+                onChangeText={(v) => setStaffForm((p) => ({ ...p, badgeNumber: v }))}
+              />
+              <Text style={styles.secFieldLabel}>Mobile number</Text>
+              <TextInput
+                style={styles.secInput}
+                placeholder="10-digit mobile (optional)"
+                placeholderTextColor={SEC_PLACEHOLDER}
+                keyboardType="phone-pad"
+                maxLength={14}
+                value={staffForm.phone}
+                onChangeText={(v) => setStaffForm((p) => ({ ...p, phone: v }))}
+              />
+
+              {staffSaveError ? (
+                <Text style={styles.secFieldError}>{staffSaveError}</Text>
+              ) : null}
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.secSaveBtn,
+                  isSavingStaff && styles.secSaveBtnDisabled,
+                  pressed && !isSavingStaff && styles.secSaveBtnPressed,
+                ]}
+                onPress={() => {
+                  void saveSecurityStaff();
+                }}
+                disabled={isSavingStaff}
+                accessibilityRole="button"
+              >
+                {isSavingStaff ? (
+                  <ActivityIndicator size="small" color={SEC.saveOnAccent} />
+                ) : (
+                  <Text style={styles.secSaveBtnText}>
+                    {staffForm.id ? 'Update roster' : 'Save to roster'}
+                  </Text>
+                )}
+              </Pressable>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal
+        visible={addDesignationOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={closeAddDesignationModal}
+        presentationStyle="overFullScreen"
+        statusBarTranslucent={Platform.OS === 'android'}
+      >
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalBg}>
+          <Pressable style={styles.secModalBackdrop} onPress={closeAddDesignationModal} />
+          <View style={styles.secModalSheet}>
+            <View style={styles.secModalHandle} />
+            <View style={styles.modalHeader}>
+              <View style={styles.secModalTitleBlock}>
+                <Text style={styles.secModalTitle}>
+                  {designationForm.id
+                    ? addDesignationContext === 'hk'
+                      ? 'Edit housekeeping designation'
+                      : 'Edit security designation'
+                    : addDesignationContext === 'hk'
+                      ? 'Add housekeeping designation'
+                      : 'Add security designation'}
+                </Text>
+                <Text style={styles.secModalHint}>
+                  Shown in the check-in designation list for this module.
+                </Text>
+              </View>
+              <TouchableOpacity onPress={closeAddDesignationModal} style={styles.closeBtn}>
+                <Ionicons name="close" size={22} color={SEC.textMuted} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <Text style={[styles.secFieldLabel, styles.secFieldLabelFirst]}>Designation title *</Text>
+              <TextInput
+                style={styles.secInput}
+                placeholder="e.g. Housekeeping Staff"
+                placeholderTextColor={SEC_PLACEHOLDER}
+                value={designationForm.title}
+                onChangeText={(v) => setDesignationForm((p) => ({ ...p, title: v }))}
+                autoCapitalize="words"
+              />
+
+              {designationSaveError ? (
+                <Text style={styles.secFieldError}>{designationSaveError}</Text>
+              ) : null}
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.secSaveBtn,
+                  isSavingDesignation && styles.secSaveBtnDisabled,
+                  pressed && !isSavingDesignation && styles.secSaveBtnPressed,
+                ]}
+                onPress={() => {
+                  void saveDesignation();
+                }}
+                disabled={isSavingDesignation}
+                accessibilityRole="button"
+              >
+                {isSavingDesignation ? (
+                  <ActivityIndicator size="small" color={SEC.saveOnAccent} />
+                ) : (
+                  <Text style={styles.secSaveBtnText}>
+                    {designationForm.id ? 'Update designation' : 'Save designation'}
+                  </Text>
+                )}
+              </Pressable>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal
+        visible={designationDeleteTarget != null}
+        transparent
+        animationType="fade"
+        onRequestClose={cancelRemoveDesignation}
+        presentationStyle="overFullScreen"
+        statusBarTranslucent={Platform.OS === 'android'}
+      >
+        <View style={[styles.secModalOverlay, styles.staffConfirmOverlay]}>
+          <Pressable style={styles.secModalBackdrop} onPress={cancelRemoveDesignation} />
+          <View style={styles.staffConfirmCard}>
+            <Text style={styles.staffConfirmTitle}>Remove designation?</Text>
+            <Text style={styles.staffConfirmMessage}>
+              Remove {designationDeleteTarget?.title} from the list? It will no longer appear in
+              check-in pickers.
+            </Text>
+            <View style={styles.staffConfirmActions}>
+              <Pressable
+                style={styles.staffConfirmCancelBtn}
+                onPress={cancelRemoveDesignation}
+                disabled={isDeletingDesignation}
+              >
+                <Text style={styles.staffConfirmCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.staffConfirmRemoveBtn,
+                  isDeletingDesignation && styles.secSaveBtnDisabled,
+                ]}
+                onPress={() => {
+                  void confirmRemoveDesignation();
+                }}
+                disabled={isDeletingDesignation}
+              >
+                {isDeletingDesignation ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.staffConfirmRemoveText}>Remove</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={staffDeleteTarget != null}
+        transparent
+        animationType="fade"
+        onRequestClose={cancelRemoveStaff}
+        presentationStyle="overFullScreen"
+        statusBarTranslucent={Platform.OS === 'android'}
+      >
+        <View style={[styles.secModalOverlay, styles.staffConfirmOverlay]}>
+          <Pressable style={styles.secModalBackdrop} onPress={cancelRemoveStaff} />
+          <View style={styles.staffConfirmCard}>
+            <Text style={styles.staffConfirmTitle}>Remove staff?</Text>
+            <Text style={styles.staffConfirmMessage}>
+              Remove {staffDeleteTarget?.name} from the roster? They will no longer appear in
+              check-in lists.
+            </Text>
+            <View style={styles.staffConfirmActions}>
+              <Pressable
+                style={styles.staffConfirmCancelBtn}
+                onPress={cancelRemoveStaff}
+                disabled={isDeletingStaff}
+              >
+                <Text style={styles.staffConfirmCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.staffConfirmRemoveBtn, isDeletingStaff && styles.secSaveBtnDisabled]}
+                onPress={() => {
+                  void confirmRemoveStaff();
+                }}
+                disabled={isDeletingStaff}
+              >
+                {isDeletingStaff ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.staffConfirmRemoveText}>Remove</Text>
+                )}
+              </Pressable>
+            </View>
           </View>
         </View>
       </Modal>
@@ -3619,6 +4312,9 @@ const styles = StyleSheet.create({
   },
   cardsStack: {
     alignSelf: 'center',
+  },
+  floatCardOuter: {
+    width: '100%',
   },
   floatCard: {
     width: '100%',
@@ -6346,6 +7042,16 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     marginTop: 4,
   },
+  secFieldLabelFirst: {
+    marginTop: 0,
+  },
+  secFieldError: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: SEC.red,
+    marginBottom: 10,
+    lineHeight: 18,
+  },
   secInput: {
     backgroundColor: SEC.bg,
     borderWidth: 1,
@@ -6558,15 +7264,120 @@ const styles = StyleSheet.create({
     color: SEC.green,
   },
   secPickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingVertical: 14,
     paddingHorizontal: 4,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: SEC.border,
   },
+  secPickerRowAddNew: {
+    backgroundColor: SEC.tealDim,
+    borderRadius: 10,
+    marginBottom: 6,
+    paddingHorizontal: 10,
+    borderBottomWidth: 0,
+  },
   secPickerRowText: {
     fontSize: 15,
     fontWeight: '600',
     color: SEC.text,
+    flex: 1,
+  },
+  secPickerRowTextAddNew: {
+    color: SEC.teal,
+    fontWeight: '800',
+  },
+  secPickerRowMain: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 8,
+  },
+  secPickerRowSub: {
+    fontSize: 12,
+    color: SEC.textMuted,
+    marginTop: 2,
+  },
+  secPickerIconBtn: {
+    padding: 8,
+    marginLeft: 4,
+  },
+  staffConfirmOverlay: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...Platform.select({
+      web: { zIndex: 10000 },
+      default: {},
+    }),
+  },
+  secPickerRowPressed: {
+    opacity: 0.7,
+  },
+  secPickerRowOnDuty: {
+    opacity: 0.55,
+  },
+  secPickerIconBtnPressed: {
+    opacity: 0.65,
+  },
+  staffConfirmCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: SEC.surfaceRaised || SEC.bg,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: SEC.border,
+    padding: 20,
+    marginHorizontal: 20,
+  },
+  staffConfirmTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: SEC.text,
+    marginBottom: 8,
+  },
+  staffConfirmMessage: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: SEC.textMuted,
+    lineHeight: 20,
+    marginBottom: 18,
+  },
+  staffConfirmActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  staffConfirmCancelBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: SEC.border,
+    alignItems: 'center',
+  },
+  staffConfirmCancelText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: SEC.textMuted,
+  },
+  staffConfirmRemoveBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: SEC.red,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
+  },
+  staffConfirmRemoveText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#fff',
+  },
+  secSaveBtnDisabled: {
+    opacity: 0.65,
+  },
+  secSaveBtnPressed: {
+    opacity: 0.88,
   },
 
   // Security module — LedgerX-style dark dashboard
@@ -6634,6 +7445,19 @@ const styles = StyleSheet.create({
     marginBottom: 0,
     paddingHorizontal: 10,
     paddingVertical: 10,
+  },
+  hubActionRowSecurity: {
+    flexWrap: 'nowrap',
+    gap: 8,
+  },
+  hubBtnSecurityTile: {
+    flex: 1,
+    flexBasis: 0,
+    minWidth: 0,
+    flexDirection: 'column',
+    height: 64,
+    paddingVertical: 10,
+    gap: 6,
   },
   waterCollapsedTankWrap: {
     paddingHorizontal: 12,
@@ -6972,9 +7796,9 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(45, 212, 191, 0.35)',
   },
   hubBtnPatrol: {
-    backgroundColor: 'rgba(255,255,255,0.06)',
+    backgroundColor: 'rgba(45, 212, 191, 0.12)',
     borderWidth: 1,
-    borderColor: SEC.border,
+    borderColor: 'rgba(45, 212, 191, 0.35)',
   },
   hubBtnWaterPrimary: {
     backgroundColor: WATER.saveAccent,
@@ -7003,8 +7827,8 @@ const styles = StyleSheet.create({
     color: SEC.bg,
   },
   hubBtnTextPatrol: {
-    fontSize: 13,
-    fontWeight: '800',
+    fontSize: 11,
+    fontWeight: '700',
     color: SEC.teal,
   },
   premiumRolesList: {

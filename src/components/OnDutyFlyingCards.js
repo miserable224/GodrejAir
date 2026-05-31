@@ -74,25 +74,27 @@ function OnDutyCard({ session, index, variant }) {
   return (
     <Animated.View
       entering={FadeInUp.delay(index * 60).springify().damping(14)}
-      style={[styles.cardWrap, floatStyle, { marginTop: stagger }]}
+      style={[styles.cardWrap, { marginTop: stagger }]}
     >
-      <View style={[styles.card, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
-        <View style={[styles.dot, { backgroundColor: theme.dot }]} />
-        <View style={styles.cardBody}>
-          <Text style={[styles.name, { color: theme.name }]} numberOfLines={1}>
-            {session.staffName || 'Staff'}
-          </Text>
-          <View style={styles.locRow}>
-            <Ionicons name="location-outline" size={12} color={theme.iconColor} />
-            <Text style={[styles.loc, { color: theme.loc }]} numberOfLines={2}>
-              {locationLine(session)}
+      <Animated.View style={floatStyle}>
+        <View style={[styles.card, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+          <View style={[styles.dot, { backgroundColor: theme.dot }]} />
+          <View style={styles.cardBody}>
+            <Text style={[styles.name, { color: theme.name }]} numberOfLines={1}>
+              {session.staffName || 'Staff'}
             </Text>
+            <View style={styles.locRow}>
+              <Ionicons name="location-outline" size={12} color={theme.iconColor} />
+              <Text style={[styles.loc, { color: theme.loc }]} numberOfLines={2}>
+                {locationLine(session)}
+              </Text>
+            </View>
+          </View>
+          <View style={[styles.iconBadge, { backgroundColor: `${theme.iconColor}22` }]}>
+            <Ionicons name={theme.icon} size={16} color={theme.iconColor} />
           </View>
         </View>
-        <View style={[styles.iconBadge, { backgroundColor: `${theme.iconColor}22` }]}>
-          <Ionicons name={theme.icon} size={16} color={theme.iconColor} />
-        </View>
-      </View>
+      </Animated.View>
     </Animated.View>
   );
 }

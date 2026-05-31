@@ -4,6 +4,29 @@ import * as Location from 'expo-location';
 
 const GEO_TIMEOUT_MS = 15000;
 
+/** True when a captured photo object has usable GPS coordinates. */
+export function photoHasGps(photo) {
+  if (!photo) return false;
+  const lat = photo.latitude ?? photo.lat;
+  const lng = photo.longitude ?? photo.lng;
+  return (
+    typeof lat === 'number' &&
+    Number.isFinite(lat) &&
+    typeof lng === 'number' &&
+    Number.isFinite(lng)
+  );
+}
+
+/** User-facing alert when a verification photo has no GPS fix. */
+export function alertGpsRequired() {
+  Alert.alert(
+    'Turn on location',
+    Platform.OS === 'web'
+      ? 'This photo must include GPS coordinates for audit. Allow location access in your browser (lock icon in the address bar → Location → Allow), then take the photo again with the camera.'
+      : 'This photo must include GPS coordinates for audit. Turn on Location Services on your device, allow location access for Godrej Air in Settings, then take the photo again with the camera.',
+  );
+}
+
 function coordsFromPosition(pos) {
   if (!pos?.coords) return null;
   const { latitude, longitude, accuracy } = pos.coords;
@@ -221,29 +244,35 @@ function photoFromPickerAsset(asset) {
   return { uri, file, asset };
 }
 
-async function attachGeo(photoBase) {
+async function attachGeo(photoBase, { requireGps = false } = {}) {
   const asset = photoBase.asset;
   let geo = geoFromPickerAsset(asset);
   if (!geo) {
     geo = await getCurrentGeoPosition();
   }
 
-  if (!geo) {
+  const photo = buildGeoTaggedPhoto(photoBase.uri, geo, photoBase.file);
+
+  if (requireGps && !photoHasGps(photo)) {
     const perm = await Location.getForegroundPermissionsAsync();
     if (perm.status !== 'granted') {
       Alert.alert(
-        'Location not available',
+        'Location permission needed',
         Platform.OS === 'web'
-          ? 'Allow location access when the browser asks, or use HTTPS/localhost. Timestamp is still saved with the photo.'
-          : 'Enable location for Godrej Air in Settings. Timestamp is still saved with the photo.',
+          ? 'Allow location when the browser asks, then take the photo again. GPS is required for water, security, and housekeeping records.'
+          : 'Allow location access for Godrej Air in Settings, then take the photo again. GPS is required for water, security, and housekeeping records.',
       );
+    } else {
+      alertGpsRequired();
     }
+    return null;
   }
 
-  return buildGeoTaggedPhoto(photoBase.uri, geo, photoBase.file);
+  return photo;
 }
 
-export async function pickGeoPhotoFromLibrary() {
+export async function pickGeoPhotoFromLibrary(opts = {}) {
+  const { requireGps = true } = opts;
   const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
   if (!perm.granted) {
     Alert.alert('Permission needed', 'Allow photo library access to attach an image.');
@@ -257,7 +286,7 @@ export async function pickGeoPhotoFromLibrary() {
   if (result.canceled) return null;
   const photoBase = photoFromPickerAsset(result.assets?.[0]);
   if (!photoBase) return null;
-  return attachGeo(photoBase);
+  return attachGeo(photoBase, { requireGps });
 }
 
 const CAMERA_PICKER_OPTIONS = {
@@ -269,15 +298,17 @@ const CAMERA_PICKER_OPTIONS = {
 
 /** Duty check-in/out: live camera only (no gallery / file picker). */
 export async function pickGeoPhotoForDuty() {
-  return pickGeoPhotoFromCamera({ dutyOnly: true });
+  return pickGeoPhotoFromCamera({ dutyOnly: true, requireGps: true });
 }
 
 /**
  * Capture a new photo with the device camera (includes mobile web `capture=camera`).
- * @param {{ dutyOnly?: boolean }} [opts] — when true, never falls back to photo library
+ * @param {{ dutyOnly?: boolean, requireGps?: boolean }} [opts]
+ *   dutyOnly — never falls back to photo library
+ *   requireGps — reject photo when GPS fix is missing (default true for audit modules)
  */
 export async function pickGeoPhotoFromCamera(opts = {}) {
-  const { dutyOnly = false } = opts;
+  const { dutyOnly = false, requireGps = true } = opts;
 
   const camPerm = await ImagePicker.requestCameraPermissionsAsync();
   if (!camPerm.granted) {
@@ -306,5 +337,5 @@ export async function pickGeoPhotoFromCamera(opts = {}) {
   if (result.canceled) return null;
   const photoBase = photoFromPickerAsset(result.assets?.[0]);
   if (!photoBase) return null;
-  return attachGeo(photoBase);
+  return attachGeo(photoBase, { requireGps });
 }

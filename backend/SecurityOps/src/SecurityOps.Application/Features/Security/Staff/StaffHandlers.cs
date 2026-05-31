@@ -3,9 +3,11 @@ using FluentValidation;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using SecurityOps.Application.Common;
 using SecurityOps.Application.Common.Interfaces;
 using SecurityOps.Application.Common.Models;
 using SecurityOps.Application.Contracts;
+using SecurityOps.Domain;
 using SecurityOps.Domain.Entities;
 
 namespace SecurityOps.Application.Features.Staff;
@@ -33,11 +35,25 @@ public sealed class GetStaffListQueryHandler : IRequestHandler<GetStaffListQuery
             q = q.Where(x => x.IsActive == active);
 
         var total = await q.CountAsync(cancellationToken);
-        var items = await q
+        var rows = await q
             .OrderBy(x => x.Name)
             .Skip((request.Page - 1) * request.PageSize)
             .Take(request.PageSize)
+            .Select(x => new
+            {
+                Staff = x,
+                LegacyName = EF.Property<string>(x, SecurityStaffColumns.FullNameLegacyShadow),
+            })
             .ToListAsync(cancellationToken);
+
+        var items = new List<SecurityStaff>(rows.Count);
+        foreach (var row in rows)
+        {
+            var staff = row.Staff;
+            if (string.IsNullOrWhiteSpace(staff.Name) && !string.IsNullOrWhiteSpace(row.LegacyName))
+                staff.Name = row.LegacyName.Trim();
+            items.Add(staff);
+        }
 
         return new PagedResult<StaffResponse>
         {
@@ -64,8 +80,19 @@ public sealed class GetStaffByIdQueryHandler : IRequestHandler<GetStaffByIdQuery
 
     public async Task<StaffResponse?> Handle(GetStaffByIdQuery request, CancellationToken cancellationToken)
     {
-        var entity = await _db.SecurityStaff.AsNoTracking().FirstOrDefaultAsync(x => x.Id == request.Id, cancellationToken);
-        return entity is null ? null : _mapper.Map<StaffResponse>(entity);
+        var row = await _db.SecurityStaff.AsNoTracking()
+            .Where(x => x.Id == request.Id)
+            .Select(x => new
+            {
+                Staff = x,
+                LegacyName = EF.Property<string>(x, SecurityStaffColumns.FullNameLegacyShadow),
+            })
+            .FirstOrDefaultAsync(cancellationToken);
+        if (row?.Staff is null) return null;
+        var entity = row.Staff;
+        if (string.IsNullOrWhiteSpace(entity.Name) && !string.IsNullOrWhiteSpace(row.LegacyName))
+            entity.Name = row.LegacyName.Trim();
+        return _mapper.Map<StaffResponse>(entity);
     }
 }
 
@@ -120,12 +147,17 @@ public sealed class UpdateStaffCommandHandler : IRequestHandler<UpdateStaffComma
     {
         var e = await _db.SecurityStaff.FirstOrDefaultAsync(x => x.Id == request.Id, cancellationToken);
         if (e is null) return null;
-        e.Name = request.Body.Name;
-        e.BadgeNumber = request.Body.BadgeNumber;
-        e.Role = request.Body.Role;
-        e.Phone = request.Body.Phone;
+        var displayName = request.Body.Name.Trim();
+        e.Name = displayName;
+        e.BadgeNumber = string.IsNullOrWhiteSpace(request.Body.BadgeNumber)
+            ? null
+            : request.Body.BadgeNumber.Trim();
+        e.Role = request.Body.Role.Trim().ToUpperInvariant();
+        e.Phone = StaffPhoneRules.NormalizeOptional(request.Body.Phone);
         e.IsActive = request.Body.IsActive;
         e.UpdatedAt = DateTime.UtcNow;
+        if (_db is DbContext dbContext)
+            dbContext.Entry(e).Property(SecurityStaffColumns.FullNameLegacyShadow).CurrentValue = displayName;
         await _db.SaveChangesAsync(cancellationToken);
         _logger.LogInformation("Updated security staff {StaffId}", e.Id);
         return _mapper.Map<StaffResponse>(e);
@@ -162,7 +194,14 @@ public sealed class CreateStaffRequestValidator : AbstractValidator<CreateStaffC
     public CreateStaffRequestValidator()
     {
         RuleFor(x => x.Body.Name).NotEmpty().MaximumLength(200);
-        RuleFor(x => x.Body.Role).NotEmpty().MaximumLength(50);
+        RuleFor(x => x.Body.Role)
+            .NotEmpty()
+            .MaximumLength(50)
+            .Must(StaffRosterRoles.IsAllowed)
+            .WithMessage("Invalid staff role.");
+        RuleFor(x => x.Body.Phone)
+            .Must(StaffPhoneRules.IsValidOptional)
+            .WithMessage("Phone must be a valid 10-digit Indian mobile number, or leave blank.");
     }
 }
 
@@ -170,6 +209,13 @@ public sealed class UpdateStaffRequestValidator : AbstractValidator<UpdateStaffC
 {
     public UpdateStaffRequestValidator()
     {
-        RuleFor(x => x.Body.Name).NotEmpty();
+        RuleFor(x => x.Body.Name).NotEmpty().MaximumLength(200);
+        RuleFor(x => x.Body.Role)
+            .NotEmpty()
+            .Must(StaffRosterRoles.IsAllowed)
+            .WithMessage("Invalid staff role.");
+        RuleFor(x => x.Body.Phone)
+            .Must(StaffPhoneRules.IsValidOptional)
+            .WithMessage("Phone must be a valid 10-digit Indian mobile number, or leave blank.");
     }
 }

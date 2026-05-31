@@ -18,7 +18,7 @@ import { COLORS, SIZES, DARK } from '../../constants/theme';
 import { ADMIN_MANPOWER_DEPLOYMENT } from '../../constants/data';
 import { useAuth } from '../../context/AuthContext';
 import ModulePhotoSection from '../../components/ModulePhotoSection';
-import { pickGeoPhotoForDuty } from '../../utils/geoPhoto';
+import { pickGeoPhotoForDuty, photoHasGps, alertGpsRequired } from '../../utils/geoPhoto';
 import { fetchStaff } from '../../modules/security/services/securityService';
 import {
   fetchOpenHkDutySession,
@@ -152,7 +152,11 @@ export default function HkDutyScreen({ navigation, route }) {
       return;
     }
     if (!photo?.uri && !photo?.file) {
-      Alert.alert('Photo required', 'Capture a check-in photo with GPS.');
+      Alert.alert('Photo required', 'Take a verification photo with the camera.');
+      return;
+    }
+    if (!photoHasGps(photo)) {
+      alertGpsRequired();
       return;
     }
 
@@ -189,6 +193,10 @@ export default function HkDutyScreen({ navigation, route }) {
   const onCheckOut = async () => {
     if (!openSession?.id) {
       Alert.alert('Not on duty', 'No open check-in found for this staff member.');
+      return;
+    }
+    if ((photo?.uri || photo?.file) && !photoHasGps(photo)) {
+      alertGpsRequired();
       return;
     }
 
@@ -309,7 +317,6 @@ export default function HkDutyScreen({ navigation, route }) {
               if (p) setPhoto(p);
             }}
             onRemovePhoto={() => setPhoto(null)}
-            cameraOnly
           />
 
           <View style={styles.dualActionRow}>

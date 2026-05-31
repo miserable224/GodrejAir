@@ -25,8 +25,19 @@ public sealed class AuthUserSeeder
                 return;
 
             var seed = _configuration.GetSection("Auth:SeedUsers").Get<List<SeedUserConfig>>() ?? DefaultSeedUsers();
+            if (seed.Count == 0)
+                return;
+
+            var syncPasswords = _configuration.GetValue("Auth:SyncSeedPasswords", true);
+            var deactivateOthers = _configuration.GetValue("Auth:DeactivateNonSeedUsers", true);
+            var allowed = new HashSet<string>(
+                seed.Select(s => s.Username.Trim().ToLowerInvariant()),
+                StringComparer.Ordinal);
+
             var now = DateTime.UtcNow;
             var created = 0;
+            var updated = 0;
+            var changed = false;
 
             foreach (var u in seed)
             {
@@ -34,59 +45,88 @@ public sealed class AuthUserSeeder
                     continue;
 
                 var username = u.Username.Trim().ToLowerInvariant();
+                var role = AppRoles.Normalize(u.Role);
+                var hash = BCrypt.Net.BCrypt.HashPassword(u.Password);
+
                 var existing = await _db.SecurityAppUsers
                     .FirstOrDefaultAsync(x => x.Username == username, cancellationToken);
 
-                if (existing is not null)
-                    continue;
-
-                _db.SecurityAppUsers.Add(new SecurityAppUser
+                if (existing is null)
                 {
-                    Id = Guid.NewGuid(),
-                    Username = username,
-                    PasswordHash = BCrypt.Net.BCrypt.HashPassword(u.Password),
-                    Role = AppRoles.Normalize(u.Role),
-                    DisplayName = u.DisplayName ?? u.Username,
-                    IsActive = true,
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                });
-                created++;
+                    _db.SecurityAppUsers.Add(new SecurityAppUser
+                    {
+                        Id = Guid.NewGuid(),
+                        Username = username,
+                        PasswordHash = hash,
+                        Role = role,
+                        DisplayName = u.DisplayName ?? u.Username,
+                        IsActive = true,
+                        CreatedAt = now,
+                        UpdatedAt = now,
+                    });
+                    created++;
+                    changed = true;
+                    continue;
+                }
+
+                if (!existing.IsActive)
+                {
+                    existing.IsActive = true;
+                    changed = true;
+                }
+
+                if (!string.Equals(existing.DisplayName, u.DisplayName, StringComparison.Ordinal)
+                    && !string.IsNullOrWhiteSpace(u.DisplayName))
+                {
+                    existing.DisplayName = u.DisplayName;
+                    changed = true;
+                }
+
+                if (syncPasswords)
+                {
+                    existing.PasswordHash = hash;
+                    existing.Role = role;
+                    existing.UpdatedAt = now;
+                    updated++;
+                    changed = true;
+                }
             }
 
-            if (created > 0)
+            if (deactivateOthers)
             {
-                await _db.SaveChangesAsync(cancellationToken);
-                _logger.LogInformation("Seeded {Count} app users ({Created} new)", seed.Count, created);
+                var stale = await _db.SecurityAppUsers
+                    .Where(x => !allowed.Contains(x.Username))
+                    .Where(x => x.IsActive)
+                    .ToListAsync(cancellationToken);
+
+                foreach (var user in stale)
+                {
+                    user.IsActive = false;
+                    user.UpdatedAt = now;
+                    changed = true;
+                }
+
+                if (stale.Count > 0)
+                    _logger.LogInformation("Deactivated {Count} non-seed app users", stale.Count);
             }
+
+            if (changed)
+                await _db.SaveChangesAsync(cancellationToken);
+
+            if (created > 0 || updated > 0)
+                _logger.LogInformation("Auth seed: {Created} created, {Updated} password/role sync", created, updated);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Auth user seed skipped (run migrations 009–010 if needed)");
+            _logger.LogError(ex, "Auth user seed failed (run migrations 009–010 and 031 if needed)");
         }
     }
 
     private static List<SeedUserConfig> DefaultSeedUsers() =>
     [
-        // Quick test logins (use on login screen)
-        new("demo", "demo123", AppRoles.Resident, "Demo Resident"),
-        new("testadmin", "testadmin123", AppRoles.SuperAdmin, "Test Admin"),
-        // Society
-        new("resident1", "resident123", AppRoles.Resident, "Demo Resident"),
-        new("owner1", "owner123", AppRoles.Owner, "Unit Owner"),
-        new("president", "president123", AppRoles.President, "Society President"),
-        new("secretary", "secretary123", AppRoles.Secretary, "Society Secretary"),
-        new("vicepresident", "vicepres123", AppRoles.VicePresident, "Vice President"),
-        new("treasurer", "treasurer123", AppRoles.Treasurer, "Treasurer"),
-        new("boardmember", "board123", AppRoles.BoardMember, "Board Member"),
-        // Operations
-        new("superadmin", "superadmin123", AppRoles.SuperAdmin, "Super Administrator"),
-        new("secsupervisor", "secsuper123", AppRoles.SecuritySupervisor, "Security Supervisor"),
-        new("fm", "fm123", AppRoles.Fm, "Facility Manager"),
-        new("afm", "afm123", AppRoles.Afm, "Assistant Facility Manager"),
-        new("guard1", "guard123", AppRoles.SecurityGuard, "Security Guard"),
-        // Legacy aliases (optional)
-        new("admin", "dev-password", AppRoles.SuperAdmin, "Administrator"),
+        new("admin", "GodrejAir#2026", AppRoles.SuperAdmin, "Administrator"),
+        new("ss", "NSF#2026", AppRoles.SecuritySupervisor, "Security Supervisor"),
+        new("fmhk", "Krishv#2026", AppRoles.Fm, "FM / Housekeeping"),
     ];
 
     private sealed record SeedUserConfig(string Username, string Password, string Role, string? DisplayName);

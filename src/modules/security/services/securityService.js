@@ -118,9 +118,39 @@ export async function fetchSanctionedStrength(token, signal) {
   return data;
 }
 
+function mapStaffRow(row) {
+  if (!row) return null;
+  const id = row.id ?? row.Id;
+  if (!id) return null;
+  return {
+    id,
+    name: (row.name ?? row.Name ?? row.fullName ?? row.FullName ?? '').trim(),
+    badgeNumber: row.badgeNumber ?? row.BadgeNumber ?? null,
+    role: row.role ?? row.Role ?? '',
+    phone: row.phone ?? row.Phone ?? null,
+    isActive: row.isActive ?? row.IsActive ?? true,
+  };
+}
+
 export async function fetchStaff(token, signal) {
-  const res = await apiFetch('/security/staff?pageSize=100', token, signal);
-  return res.data?.items ?? [];
+  const all = [];
+  let page = 1;
+  let totalPages = 1;
+
+  do {
+    const res = await apiFetch(
+      `/security/staff?page=${page}&pageSize=100&active=true`,
+      token,
+      signal,
+    );
+    const pageData = res.data ?? res.Data ?? res;
+    const items = pageData?.items ?? pageData?.Items ?? [];
+    all.push(...items.map(mapStaffRow).filter(Boolean));
+    totalPages = Number(pageData?.totalPages ?? pageData?.TotalPages) || 1;
+    page += 1;
+  } while (page <= totalPages);
+
+  return all;
 }
 
 export async function fetchMonthlyBilling(token, month, signal) {
@@ -338,12 +368,12 @@ async function appendPhotoToFormData(formData, photo) {
     try {
       const response = await fetch(uri);
       if (!response.ok) {
-        throw new Error('Could not read the selected photo. Use Gallery and try again.');
+        throw new Error('Could not read the captured photo. Take the photo again.');
       }
       blob = await response.blob();
     } catch {
       throw new Error(
-        'Could not read the photo on this device. Use Gallery (not Camera) and ensure location permission is allowed or denied — do not leave the prompt open.',
+        'Could not read the photo on this device. Take the photo again and ensure location permission is allowed.',
       );
     }
     const type = blob.type || photoMimeType(name);
@@ -697,6 +727,14 @@ export async function postMobilePatrol(token, payload, signal) {
   return res.json();
 }
 
+function readStaffApiError(body, fallback) {
+  if (!body) return fallback;
+  const errs = body.errors ?? body.Errors;
+  if (Array.isArray(errs) && errs.length > 0) return errs.join(' ');
+  if (typeof errs === 'string' && errs.trim()) return errs.trim();
+  return body.message ?? body.Message ?? body.error ?? body.title ?? fallback;
+}
+
 export async function postStaffMember(token, payload, signal) {
   const res = await fetchWithNetworkHint(`${apiBase()}/security/staff`, {
     method: 'POST',
@@ -706,10 +744,177 @@ export async function postStaffMember(token, payload, signal) {
   }, apiNetworkHint());
   if (!res.ok) {
     let detail = res.statusText;
-    try { detail = (await res.json())?.message || detail; } catch { /* ignore */ }
+    try {
+      const body = await res.json();
+      detail = readStaffApiError(body, detail);
+    } catch { /* ignore */ }
     throw new Error(`Failed to add staff (${res.status}): ${detail}`);
   }
   invalidateSecurityCache();
-  return res.json();
+  const json = await res.json();
+  return json?.data ?? json;
+}
+
+export async function putStaffMember(token, id, payload, signal) {
+  const res = await fetchWithNetworkHint(`${apiBase()}/security/staff/${id}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: payload.name,
+      badgeNumber: payload.badgeNumber ?? null,
+      role: payload.role,
+      phone: payload.phone ?? null,
+      isActive: payload.isActive !== false,
+    }),
+    signal,
+  }, apiNetworkHint());
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      detail = readStaffApiError(body, detail);
+    } catch { /* ignore */ }
+    throw new Error(`Failed to update staff (${res.status}): ${detail}`);
+  }
+  invalidateSecurityCache();
+  const json = await res.json();
+  return json?.data ?? json;
+}
+
+function mapDesignationRow(row) {
+  if (!row) return null;
+  const id = row.id ?? row.Id;
+  if (!id) return null;
+  return {
+    id,
+    module: (row.module ?? row.Module ?? 'security').toLowerCase(),
+    title: (row.title ?? row.Title ?? '').trim(),
+    sortOrder: Number(row.sortOrder ?? row.SortOrder) || 0,
+    isActive: row.isActive ?? row.IsActive ?? true,
+  };
+}
+
+function designationsItemPath(module, id) {
+  const mod = String(module || 'security').toLowerCase();
+  const base = mod === 'housekeeping' ? '/housekeeping/designations' : '/security/designations';
+  return `${base}/${encodeURIComponent(String(id))}`;
+}
+
+export async function fetchDesignations(token, module, signal) {
+  const mod = String(module || 'security').toLowerCase();
+  const all = [];
+  let page = 1;
+  let totalPages = 1;
+
+  do {
+    const query =
+      mod === 'housekeeping'
+        ? `page=${page}&pageSize=100&active=true`
+        : `module=${encodeURIComponent(mod)}&page=${page}&pageSize=100&active=true`;
+    const path =
+      mod === 'housekeeping'
+        ? `/housekeeping/designations?${query}`
+        : `/security/designations?${query}`;
+    const res = await apiFetch(path, token, signal);
+    const pageData = res.data ?? res.Data ?? res;
+    const items = pageData?.items ?? pageData?.Items ?? [];
+    all.push(...items.map(mapDesignationRow).filter(Boolean));
+    totalPages = Number(pageData?.totalPages ?? pageData?.TotalPages) || 1;
+    page += 1;
+  } while (page <= totalPages);
+
+  return all;
+}
+
+export async function postDesignation(token, payload, signal) {
+  const mod = String(payload?.module || 'security').toLowerCase();
+  const path = mod === 'housekeeping' ? '/housekeeping/designations' : '/security/designations';
+  const body =
+    mod === 'housekeeping'
+      ? { title: payload.title }
+      : { module: payload.module, title: payload.title };
+  const res = await fetchWithNetworkHint(`${apiBase()}${path}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  }, apiNetworkHint());
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      detail = readStaffApiError(body, detail);
+    } catch { /* ignore */ }
+    throw new Error(`Failed to add designation (${res.status}): ${detail}`);
+  }
+  invalidateSecurityCache();
+  const json = await res.json();
+  return json?.data ?? json;
+}
+
+export async function putDesignation(token, id, payload, signal) {
+  const mod = String(payload?.module || 'security').toLowerCase();
+  const res = await fetchWithNetworkHint(`${apiBase()}${designationsItemPath(mod, id)}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      module: payload.module,
+      title: payload.title,
+      isActive: payload.isActive !== false,
+    }),
+    signal,
+  }, apiNetworkHint());
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      detail = readStaffApiError(body, detail);
+    } catch { /* ignore */ }
+    throw new Error(`Failed to update designation (${res.status}): ${detail}`);
+  }
+  invalidateSecurityCache();
+  const json = await res.json();
+  return json?.data ?? json;
+}
+
+export async function deleteDesignation(token, id, module, signal) {
+  const res = await fetchWithNetworkHint(
+    `${apiBase()}${designationsItemPath(module, id)}`,
+    {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+      signal,
+    },
+    apiNetworkHint(),
+  );
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      detail = readStaffApiError(body, detail);
+    } catch { /* ignore */ }
+    throw new Error(`Failed to remove designation (${res.status}): ${detail}`);
+  }
+  invalidateSecurityCache();
+  return true;
+}
+
+export async function deleteStaffMember(token, id, signal) {
+  const staffId = encodeURIComponent(String(id));
+  const res = await fetchWithNetworkHint(`${apiBase()}/security/staff/${staffId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+    signal,
+  }, apiNetworkHint());
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      detail = readStaffApiError(body, detail);
+    } catch { /* ignore */ }
+    throw new Error(`Failed to remove staff (${res.status}): ${detail}`);
+  }
+  invalidateSecurityCache();
+  return true;
 }
 

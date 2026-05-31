@@ -16,6 +16,7 @@ public interface IUnitOfWork
 public interface IApplicationDbContext : IUnitOfWork
 {
     DbSet<SecurityStaff> SecurityStaff { get; }
+    DbSet<DutyDesignation> DutyDesignations { get; }
     DbSet<SecurityLocation> SecurityLocations { get; }
     DbSet<SecurityShift> SecurityShifts { get; }
     DbSet<SecurityShiftDeployment> SecurityShiftDeployments { get; }
@@ -59,6 +60,7 @@ public interface IApplicationDbContext : IUnitOfWork
 
     // Water tanker module
     DbSet<WaterVendor> WaterVendors { get; }
+    DbSet<WaterVendorVehicle> WaterVendorVehicles { get; }
     DbSet<WaterRecord> WaterRecords { get; }
     DbSet<WaterRecordPhoto> WaterRecordPhotos { get; }
 

@@ -13,6 +13,22 @@ public sealed record StaffResponse(
 public sealed record CreateStaffRequest(string Name, string? BadgeNumber, string Role, string? Phone);
 public sealed record UpdateStaffRequest(string Name, string? BadgeNumber, string Role, string? Phone, bool IsActive);
 
+// --- Duty designations (check-in picker) ---
+public sealed record DesignationResponse(
+    Guid Id,
+    string Module,
+    string Title,
+    int SortOrder,
+    bool IsActive,
+    DateTime CreatedAt);
+
+public sealed record CreateDesignationRequest(string? Module, string Title);
+
+/// <summary>Housekeeping POST body — module is implied by route.</summary>
+public sealed record HousekeepingCreateDesignationRequest(string Title);
+
+public sealed record UpdateDesignationRequest(string Module, string Title, bool IsActive);
+
 // --- Locations ---
 public sealed record LocationResponse(Guid Id, string Name, string? Code, string? Description, double? Latitude, double? Longitude, bool IsActive);
 public sealed record CreateLocationRequest(string Name, string? Code, string? Description, double? Latitude, double? Longitude);

@@ -19,19 +19,25 @@ public sealed class AuthController : ControllerBase
 {
     private readonly ApplicationDbContext _db;
     private readonly IConfiguration _configuration;
+    private readonly IWebHostEnvironment _environment;
     private readonly JwtTokenService _tokens;
     private readonly AdminOtpService _adminOtp;
+    private readonly AuthUserSeeder _authSeeder;
 
     public AuthController(
         ApplicationDbContext db,
         IConfiguration configuration,
+        IWebHostEnvironment environment,
         JwtTokenService tokens,
-        AdminOtpService adminOtp)
+        AdminOtpService adminOtp,
+        AuthUserSeeder authSeeder)
     {
         _db = db;
         _configuration = configuration;
+        _environment = environment;
         _tokens = tokens;
         _adminOtp = adminOtp;
+        _authSeeder = authSeeder;
     }
 
     /// <summary>Send a one-time password to the admin email (sign-in or registration).</summary>
@@ -80,6 +86,24 @@ public sealed class AuthController : ControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
+    }
+
+    /// <summary>Development only — (re)creates admin / ss / fmhk from Auth:SeedUsers.</summary>
+    [HttpPost("sync-seed-users")]
+    [AllowAnonymous]
+    [ApiExplorerSettings(IgnoreApi = true)]
+    public async Task<ActionResult<object>> SyncSeedUsers(CancellationToken cancellationToken)
+    {
+        if (!_environment.IsDevelopment())
+            return NotFound();
+
+        await _authSeeder.SeedAsync(cancellationToken);
+        var active = await _db.SecurityAppUsers.AsNoTracking()
+            .Where(u => u.IsActive)
+            .Select(u => new { u.Username, u.Role })
+            .ToListAsync(cancellationToken);
+
+        return Ok(new { message = "Operational users synced.", activeUsers = active });
     }
 
     /// <summary>Production login — validates username/password against security_app_users.</summary>
@@ -177,9 +201,13 @@ public sealed class AuthController : ControllerBase
         return Ok(new MeResponse(sub ?? "", username, displayName, role));
     }
 
-    /// <summary>Issue a JWT for local/Swagger testing when Jwt:DevLogin:Enabled is true.</summary>
+    /// <summary>
+    /// Deprecated — use <see cref="Login"/> with seeded operational users.
+    /// Disabled unless Jwt:DevLogin:Enabled is explicitly true.
+    /// </summary>
     [HttpPost("dev-token")]
     [AllowAnonymous]
+    [ApiExplorerSettings(IgnoreApi = true)]
     public async Task<ActionResult<AuthTokenResponse>> DevToken([FromBody] DevTokenRequest? request, CancellationToken cancellationToken)
     {
         if (!_configuration.GetValue("Jwt:DevLogin:Enabled", false))

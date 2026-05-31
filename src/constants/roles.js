@@ -86,6 +86,22 @@ export function isSuperAdmin(apiRole) {
   return r === API_ROLES.SUPER_ADMIN;
 }
 
+/** Check-in / check-out on the Security module card. */
+export function canUseSecurityOps(apiRole) {
+  const r = normalizeApiRole(apiRole);
+  return (
+    isSuperAdmin(r) ||
+    r === API_ROLES.SECURITY_SUPERVISOR ||
+    r === API_ROLES.SECURITY_GUARD
+  );
+}
+
+/** Record patrolling — SS and admin only (not FM / AFM). */
+export function canRecordSecurityPatrol(apiRole) {
+  const r = normalizeApiRole(apiRole);
+  return isSuperAdmin(r) || r === API_ROLES.SECURITY_SUPERVISOR;
+}
+
 export function isOperationsStaff(apiRole) {
   return NAV_BUCKETS.operations.includes(normalizeApiRole(apiRole)) || isSuperAdmin(apiRole);
 }
@@ -124,7 +140,6 @@ export function getVisibleModuleIds(apiRole) {
       return new Set([
         DASHBOARD_MODULE_IDS.SECURITY,
         DASHBOARD_MODULE_IDS.WATER,
-        DASHBOARD_MODULE_IDS.WORKFORCE,
       ]);
     default:
       return null;
@@ -156,34 +171,36 @@ export function filterDashboardGroups(groups, apiRole) {
     .filter((g) => g.sections.length > 0);
 }
 
-/** FM, AFM, and guards only get the Home tab (no Tenant / Settings). */
+const FIELD_OPS_DASHBOARD_ROLES = new Set([
+  API_ROLES.SECURITY_SUPERVISOR,
+  API_ROLES.FM,
+  API_ROLES.AFM,
+]);
+
+const FIELD_OPS_MODULE_IDS = new Set([
+  DASHBOARD_MODULE_IDS.SECURITY,
+  DASHBOARD_MODULE_IDS.WORKFORCE,
+  DASHBOARD_MODULE_IDS.WATER,
+]);
+
+/** SS / FM / AFM — dashboard cards stay collapsed; duty + water entry actions only. */
+export function isFieldOpsDashboardRole(apiRole) {
+  return FIELD_OPS_DASHBOARD_ROLES.has(normalizeApiRole(apiRole));
+}
+
+export function canExpandDashboardModule(moduleId, apiRole) {
+  if (!isFieldOpsDashboardRole(apiRole)) return true;
+  return !FIELD_OPS_MODULE_IDS.has(moduleId);
+}
+
+/** FM, AFM, SS, and guards only get the Home tab (no Tenant tab). */
 export function hasLimitedAdminNav(apiRole) {
   const r = normalizeApiRole(apiRole);
   return (
     r === API_ROLES.SECURITY_GUARD ||
+    r === API_ROLES.SECURITY_SUPERVISOR ||
     r === API_ROLES.FM ||
     r === API_ROLES.AFM
   );
 }
 
-/** Demo login accounts grouped for the login screen */
-export const DEMO_ACCOUNTS = {
-  resident: [
-    { label: 'Resident', username: 'resident1', password: 'resident123' },
-    { label: 'Owner', username: 'owner1', password: 'owner123' },
-  ],
-  society: [
-    { label: 'President', username: 'president', password: 'president123' },
-    { label: 'Secretary', username: 'secretary', password: 'secretary123' },
-    { label: 'Vice President', username: 'vicepresident', password: 'vicepres123' },
-    { label: 'Treasurer', username: 'treasurer', password: 'treasurer123' },
-    { label: 'Board Member', username: 'boardmember', password: 'board123' },
-  ],
-  staff: [
-    { label: 'Super Admin', username: 'superadmin', password: 'superadmin123' },
-    { label: 'Sec. Supervisor', username: 'secsupervisor', password: 'secsuper123' },
-    { label: 'FM', username: 'fm', password: 'fm123' },
-    { label: 'AFM', username: 'afm', password: 'afm123' },
-    { label: 'Guard', username: 'guard1', password: 'guard123' },
-  ],
-};

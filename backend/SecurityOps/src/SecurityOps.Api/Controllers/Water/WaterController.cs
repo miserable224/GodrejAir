@@ -38,22 +38,45 @@ public sealed class WaterController : ControllerBase
 
     [HttpGet("vendors")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<WaterVendorDto>>>> ListVendors(
+        [FromQuery] bool includeInactiveVehicles = false,
         CancellationToken ct = default)
     {
         var raw = await _db.WaterVendors.AsNoTracking()
             .OrderBy(v => v.Name)
             .Select(v => new
             {
-                v.Id, v.Name, v.ContactNumber, v.Address, v.VehicleNo,
+                v.Id, v.Name, v.ContactNumber, v.Address,
                 v.TankerCapacityKl, v.CreatedAt,
             })
             .ToListAsync(ct);
 
-        var rows = raw
-            .Select(v => new WaterVendorDto(
-                v.Id, v.Name, v.ContactNumber, v.Address, v.VehicleNo,
-                v.TankerCapacityKl, v.CreatedAt))
-            .ToList();
+        var vendorIds = raw.Select(v => v.Id).ToList();
+        var vehicleQuery = _db.WaterVendorVehicles.AsNoTracking()
+            .Where(v => vendorIds.Contains(v.VendorId));
+        if (!includeInactiveVehicles)
+            vehicleQuery = vehicleQuery.Where(v => v.IsActive);
+
+        var vehicleRows = await vehicleQuery
+            .OrderBy(v => v.VehicleNo)
+            .Select(v => new
+            {
+                v.Id, v.VendorId, v.VehicleNo, v.IsActive, v.Notes, v.CreatedAt, v.DeactivatedAt,
+            })
+            .ToListAsync(ct);
+
+        var vehiclesByVendor = vehicleRows
+            .GroupBy(v => v.VendorId)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        var rows = raw.Select(v =>
+        {
+            vehiclesByVendor.TryGetValue(v.Id, out var fleet);
+            var vehicles = (fleet ?? new())
+                .Select(p => new WaterVendorVehicleDto(
+                    p.Id, p.VehicleNo, p.IsActive, p.Notes, p.CreatedAt, p.DeactivatedAt))
+                .ToList();
+            return ToVendorDto(v.Id, v.Name, v.ContactNumber, v.Address, v.TankerCapacityKl, v.CreatedAt, vehicles);
+        }).ToList();
 
         return Ok(ApiResponse<IReadOnlyList<WaterVendorDto>>.Ok(rows));
     }
@@ -66,21 +89,100 @@ public sealed class WaterController : ControllerBase
         if (req is null || string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(ApiResponse<WaterVendorDto>.Fail("Vendor name is required."));
 
+        var plates = CollectVehicleNos(req.VehicleNos, req.VehicleNo);
         var v = new WaterVendor
         {
             Name = req.Name.Trim(),
             ContactNumber = req.ContactNumber?.Trim(),
             Address = req.Address?.Trim(),
-            VehicleNo = req.VehicleNo?.Trim().ToUpperInvariant(),
+            VehicleNo = plates.Count > 0 ? plates[0] : null,
             TankerCapacityKl = req.TankerCapacityKl is > 0 ? req.TankerCapacityKl.Value : 6m,
             CreatedAt = DateTime.UtcNow,
         };
         _db.WaterVendors.Add(v);
         await _db.SaveChangesAsync(ct);
 
-        return Ok(ApiResponse<WaterVendorDto>.Ok(new WaterVendorDto(
-            v.Id, v.Name, v.ContactNumber, v.Address, v.VehicleNo,
-            v.TankerCapacityKl, v.CreatedAt)));
+        await AddVendorVehiclesAsync(v.Id, plates, ct);
+        var fleet = await LoadVendorVehicleDtosAsync(v.Id, activeOnly: true, ct);
+        return Ok(ApiResponse<WaterVendorDto>.Ok(ToVendorDto(v, fleet)));
+    }
+
+    [HttpPost("vendors/{vendorId:guid}/vehicles")]
+    public async Task<ActionResult<ApiResponse<WaterVendorVehicleDto>>> AddVendorVehicle(
+        Guid vendorId,
+        [FromBody] AddWaterVendorVehicleRequest? req,
+        CancellationToken ct = default)
+    {
+        if (req is null || string.IsNullOrWhiteSpace(req.VehicleNo))
+            return BadRequest(ApiResponse<WaterVendorVehicleDto>.Fail("Vehicle number is required."));
+
+        var exists = await _db.WaterVendors.AsNoTracking().AnyAsync(v => v.Id == vendorId, ct);
+        if (!exists)
+            return NotFound(ApiResponse<WaterVendorVehicleDto>.Fail("Vendor not found."));
+
+        var plate = NormalizeVehicleNo(req.VehicleNo);
+        if (plate is null)
+            return BadRequest(ApiResponse<WaterVendorVehicleDto>.Fail("Invalid vehicle number."));
+
+        var duplicate = await _db.WaterVendorVehicles.AsNoTracking()
+            .AnyAsync(v => v.VendorId == vendorId && v.VehicleNo == plate, ct);
+        if (duplicate)
+            return BadRequest(ApiResponse<WaterVendorVehicleDto>.Fail("This plate is already registered for this vendor."));
+
+        var row = new WaterVendorVehicle
+        {
+            VendorId = vendorId,
+            VehicleNo = plate,
+            IsActive = true,
+            Notes = req.Notes?.Trim(),
+            CreatedAt = DateTime.UtcNow,
+        };
+        _db.WaterVendorVehicles.Add(row);
+        await _db.SaveChangesAsync(ct);
+
+        return Ok(ApiResponse<WaterVendorVehicleDto>.Ok(ToVehicleDto(row)));
+    }
+
+    [HttpPatch("vendors/{vendorId:guid}/vehicles/{vehicleId:guid}")]
+    public async Task<ActionResult<ApiResponse<WaterVendorVehicleDto>>> UpdateVendorVehicle(
+        Guid vendorId,
+        Guid vehicleId,
+        [FromBody] UpdateWaterVendorVehicleRequest? req,
+        CancellationToken ct = default)
+    {
+        var row = await _db.WaterVendorVehicles
+            .FirstOrDefaultAsync(v => v.Id == vehicleId && v.VendorId == vendorId, ct);
+        if (row is null)
+            return NotFound(ApiResponse<WaterVendorVehicleDto>.Fail("Vehicle not found for this vendor."));
+
+        if (req?.IsActive == false && row.IsActive)
+        {
+            row.IsActive = false;
+            row.DeactivatedAt = DateTime.UtcNow;
+        }
+        else if (req?.IsActive == true && !row.IsActive)
+        {
+            row.IsActive = true;
+            row.DeactivatedAt = null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(req?.VehicleNo))
+        {
+            var plate = NormalizeVehicleNo(req.VehicleNo);
+            if (plate is null)
+                return BadRequest(ApiResponse<WaterVendorVehicleDto>.Fail("Invalid vehicle number."));
+            var duplicate = await _db.WaterVendorVehicles.AsNoTracking()
+                .AnyAsync(v => v.VendorId == vendorId && v.VehicleNo == plate && v.Id != vehicleId, ct);
+            if (duplicate)
+                return BadRequest(ApiResponse<WaterVendorVehicleDto>.Fail("Another row already uses this plate."));
+            row.VehicleNo = plate;
+        }
+
+        if (req?.Notes != null)
+            row.Notes = string.IsNullOrWhiteSpace(req.Notes) ? null : req.Notes.Trim();
+
+        await _db.SaveChangesAsync(ct);
+        return Ok(ApiResponse<WaterVendorVehicleDto>.Ok(ToVehicleDto(row)));
     }
 
     // ── RECORDS ─────────────────────────────────────────────────────────────
@@ -89,10 +191,11 @@ public sealed class WaterController : ControllerBase
     public async Task<ActionResult<ApiResponse<IReadOnlyList<WaterRecordDto>>>> ListRecords(
         [FromQuery] int days = 30,
         [FromQuery] int limit = 200,
+        [FromQuery] bool includePhotos = false,
         CancellationToken ct = default)
     {
         if (days <= 0 || days > 365) days = 30;
-        if (limit <= 0 || limit > 1000) limit = 200;
+        if (limit <= 0 || limit > 500) limit = 200;
         var since = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-days));
 
         var raw = await _db.WaterRecords.AsNoTracking()
@@ -109,39 +212,64 @@ public sealed class WaterController : ControllerBase
             .ToListAsync(ct);
 
         var recordIds = raw.Select(r => r.Id).ToList();
-        var photoRows = await _db.WaterRecordPhotos.AsNoTracking()
-            .Where(p => recordIds.Contains(p.RecordId))
-            .OrderBy(p => p.CapturedAt ?? p.CreatedAt)
-            .Select(p => new
-            {
-                p.Id, p.RecordId, p.PhotoType, p.PhotoUrl, p.DetectedValue,
-                p.ScanConfidence, p.Latitude, p.Longitude, p.CapturedAt,
-                p.MimeType, p.SizeBytes,
-            })
-            .ToListAsync(ct);
-
-        var photosByRecord = photoRows
-            .GroupBy(p => p.RecordId)
-            .ToDictionary(g => g.Key, g => g.ToList());
-
         var origin = $"{Request.Scheme}://{Request.Host.Value}";
+
+        Dictionary<Guid, IReadOnlyList<WaterRecordPhotoDto>>? photosByRecord = null;
+        Dictionary<Guid, int>? photoCountByRecord = null;
+
+        if (includePhotos && recordIds.Count > 0)
+        {
+            var photoRows = await _db.WaterRecordPhotos.AsNoTracking()
+                .Where(p => recordIds.Contains(p.RecordId))
+                .OrderBy(p => p.CapturedAt ?? p.CreatedAt)
+                .ToListAsync(ct);
+
+            photosByRecord = photoRows
+                .GroupBy(p => p.RecordId)
+                .ToDictionary(
+                    g => g.Key,
+                    g => (IReadOnlyList<WaterRecordPhotoDto>)g
+                        .Select(p => new WaterRecordPhotoDto(
+                            Id: p.Id,
+                            PhotoType: p.PhotoType,
+                            Url: AbsoluteUrl(origin, p.PhotoUrl),
+                            DetectedValue: p.DetectedValue,
+                            ScanConfidence: p.ScanConfidence,
+                            Latitude: p.Latitude,
+                            Longitude: p.Longitude,
+                            CapturedAt: p.CapturedAt,
+                            MimeType: p.MimeType,
+                            SizeBytes: p.SizeBytes))
+                        .ToList());
+        }
+        else if (recordIds.Count > 0)
+        {
+            var counts = await _db.WaterRecordPhotos.AsNoTracking()
+                .Where(p => recordIds.Contains(p.RecordId))
+                .GroupBy(p => p.RecordId)
+                .Select(g => new { RecordId = g.Key, Count = g.Count() })
+                .ToListAsync(ct);
+            photoCountByRecord = counts.ToDictionary(x => x.RecordId, x => x.Count);
+        }
 
         var rows = raw.Select(r =>
         {
-            photosByRecord.TryGetValue(r.Id, out var ps);
-            var photos = (ps ?? new())
-                .Select(p => new WaterRecordPhotoDto(
-                    Id: p.Id,
-                    PhotoType: p.PhotoType,
-                    Url: AbsoluteUrl(origin, p.PhotoUrl),
-                    DetectedValue: p.DetectedValue,
-                    ScanConfidence: p.ScanConfidence,
-                    Latitude: p.Latitude,
-                    Longitude: p.Longitude,
-                    CapturedAt: p.CapturedAt,
-                    MimeType: p.MimeType,
-                    SizeBytes: p.SizeBytes))
-                .ToList();
+            IReadOnlyList<WaterRecordPhotoDto>? photos = null;
+            var photoCount = 0;
+
+            if (photosByRecord != null)
+            {
+                if (photosByRecord.TryGetValue(r.Id, out var list))
+                {
+                    photos = list;
+                    photoCount = list.Count;
+                }
+            }
+            else if (photoCountByRecord != null)
+            {
+                photoCountByRecord.TryGetValue(r.Id, out photoCount);
+            }
+
             return new WaterRecordDto(
                 Id: r.Id,
                 Date: r.Date.ToString("yyyy-MM-dd"),
@@ -158,7 +286,8 @@ public sealed class WaterController : ControllerBase
                 Notes: r.Notes,
                 ReceiptUrl: r.ReceiptUrl,
                 CreatedAt: r.CreatedAt,
-                Photos: photos);
+                Photos: photos,
+                PhotoCount: photoCount);
         }).ToList();
 
         return Ok(ApiResponse<IReadOnlyList<WaterRecordDto>>.Ok(rows));
@@ -362,7 +491,8 @@ public sealed class WaterController : ControllerBase
             Notes: entity.Notes,
             ReceiptUrl: entity.ReceiptUrl,
             CreatedAt: entity.CreatedAt,
-            Photos: photoDtos);
+            Photos: photoDtos,
+            PhotoCount: photoDtos.Count);
 
         return Ok(ApiResponse<WaterRecordDto>.Ok(dto));
     }
@@ -385,6 +515,101 @@ public sealed class WaterController : ControllerBase
     }
 
     /// <summary>Accepts YYYY-MM-DD, DD/MM/YYYY, DD/MM/YY, and DD-MM-YYYY.</summary>
+    private static WaterVendorDto ToVendorDto(
+        Guid id,
+        string name,
+        string? contact,
+        string? address,
+        decimal capacityKl,
+        DateTime createdAt,
+        IReadOnlyList<WaterVendorVehicleDto> vehicles) =>
+        new(
+            id,
+            name,
+            contact,
+            address,
+            capacityKl,
+            createdAt,
+            vehicles,
+            vehicles.FirstOrDefault(v => v.IsActive)?.VehicleNo
+                ?? vehicles.FirstOrDefault()?.VehicleNo);
+
+    private static WaterVendorDto ToVendorDto(WaterVendor v, IReadOnlyList<WaterVendorVehicleDto> vehicles) =>
+        ToVendorDto(v.Id, v.Name, v.ContactNumber, v.Address, v.TankerCapacityKl, v.CreatedAt, vehicles);
+
+    private static WaterVendorVehicleDto ToVehicleDto(WaterVendorVehicle v) =>
+        new(v.Id, v.VehicleNo, v.IsActive, v.Notes, v.CreatedAt, v.DeactivatedAt);
+
+    private async Task AddVendorVehiclesAsync(
+        Guid vendorId,
+        IReadOnlyList<string> plates,
+        CancellationToken ct)
+    {
+        var added = false;
+        foreach (var plate in plates)
+        {
+            var exists = await _db.WaterVendorVehicles.AsNoTracking()
+                .AnyAsync(v => v.VendorId == vendorId && v.VehicleNo == plate, ct);
+            if (exists) continue;
+
+            _db.WaterVendorVehicles.Add(new WaterVendorVehicle
+            {
+                VendorId = vendorId,
+                VehicleNo = plate,
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow,
+            });
+            added = true;
+        }
+
+        if (added)
+            await _db.SaveChangesAsync(ct);
+    }
+
+    private async Task<IReadOnlyList<WaterVendorVehicleDto>> LoadVendorVehicleDtosAsync(
+        Guid vendorId,
+        bool activeOnly,
+        CancellationToken ct)
+    {
+        var q = _db.WaterVendorVehicles.AsNoTracking().Where(v => v.VendorId == vendorId);
+        if (activeOnly)
+            q = q.Where(v => v.IsActive);
+        return await q
+            .OrderBy(v => v.VehicleNo)
+            .Select(v => new WaterVendorVehicleDto(
+                v.Id, v.VehicleNo, v.IsActive, v.Notes, v.CreatedAt, v.DeactivatedAt))
+            .ToListAsync(ct);
+    }
+
+    private static List<string> CollectVehicleNos(IReadOnlyList<string>? many, string? single)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var list = new List<string>();
+        void Add(string? raw)
+        {
+            var plate = NormalizeVehicleNo(raw);
+            if (plate is null || !set.Add(plate)) return;
+            list.Add(plate);
+        }
+
+        if (many is { Count: > 0 })
+        {
+            foreach (var p in many)
+                Add(p);
+        }
+
+        Add(single);
+        return list;
+    }
+
+    private static string? NormalizeVehicleNo(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var plate = raw.Trim().ToUpperInvariant();
+        plate = string.Concat(plate.Where(c => !char.IsWhiteSpace(c) && c != '-'));
+        return plate.Length < 4 ? null : plate;
+    }
+
     private static DateOnly? ParseDate(string? input)
     {
         if (string.IsNullOrWhiteSpace(input)) return null;
@@ -404,16 +629,34 @@ public sealed class WaterController : ControllerBase
         string Name,
         string? ContactNumber,
         string? Address,
-        string? VehicleNo,
         decimal TankerCapacityKl,
-        DateTime CreatedAt);
+        DateTime CreatedAt,
+        IReadOnlyList<WaterVendorVehicleDto> Vehicles,
+        /// <summary>First active plate — convenience for older clients.</summary>
+        string? VehicleNo = null);
+
+    public sealed record WaterVendorVehicleDto(
+        Guid Id,
+        string VehicleNo,
+        bool IsActive,
+        string? Notes,
+        DateTime CreatedAt,
+        DateTime? DeactivatedAt);
 
     public sealed record CreateWaterVendorRequest(
         string Name,
         string? ContactNumber,
         string? Address,
         string? VehicleNo,
+        IReadOnlyList<string>? VehicleNos = null,
         decimal? TankerCapacityKl = null);
+
+    public sealed record AddWaterVendorVehicleRequest(string VehicleNo, string? Notes = null);
+
+    public sealed record UpdateWaterVendorVehicleRequest(
+        string? VehicleNo = null,
+        bool? IsActive = null,
+        string? Notes = null);
 
     public sealed record WaterRecordDto(
         Guid Id,
@@ -431,7 +674,8 @@ public sealed class WaterController : ControllerBase
         string? Notes,
         string? ReceiptUrl,
         DateTime CreatedAt,
-        IReadOnlyList<WaterRecordPhotoDto>? Photos = null);
+        IReadOnlyList<WaterRecordPhotoDto>? Photos = null,
+        int PhotoCount = 0);
 
     public sealed record WaterRecordPhotoDto(
         Guid Id,
