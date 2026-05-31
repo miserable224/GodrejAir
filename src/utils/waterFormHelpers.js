@@ -1,5 +1,52 @@
-import { WATER_PHOTO_TYPES } from '../constants/waterPhotoTypes';
+import {
+  WATER_PHOTO_TYPES,
+  WATER_PHOTO_CAPTURE_ORDER,
+  WATER_PHOTO_CHECKLIST,
+} from '../constants/waterPhotoTypes';
 import { photoHasGps } from './geoPhoto';
+
+export function photoTypeStatusKey(type) {
+  switch (type) {
+    case WATER_PHOTO_TYPES.OPENING:
+      return 'opening';
+    case WATER_PHOTO_TYPES.CLOSING:
+      return 'closing';
+    case WATER_PHOTO_TYPES.TDS:
+      return 'tds';
+    case WATER_PHOTO_TYPES.VEHICLE:
+      return 'vehicle';
+    default:
+      return null;
+  }
+}
+
+/** Next photo type in the guided capture sequence, or null when all four are scanned. */
+export function nextWaterPhotoCaptureType(form) {
+  const status = waterPhotoTypeStatus(form);
+  for (const type of WATER_PHOTO_CAPTURE_ORDER) {
+    const key = photoTypeStatusKey(type);
+    if (key && !status[key]) return type;
+  }
+  return null;
+}
+
+export function nextMissingWaterPhotoChecklistItem(form) {
+  const status = waterPhotoTypeStatus(form);
+  return (
+    WATER_PHOTO_CHECKLIST.find((item) => {
+      const key = photoTypeStatusKey(item.type);
+      return key && !status[key];
+    }) ?? null
+  );
+}
+
+export function waterPhotoTypesCapturedCount(form) {
+  const status = waterPhotoTypeStatus(form);
+  return WATER_PHOTO_CAPTURE_ORDER.filter((type) => {
+    const key = photoTypeStatusKey(type);
+    return key && status[key];
+  }).length;
+}
 
 export function getTodayDMY() {
   const d = new Date();
@@ -186,7 +233,7 @@ export function allWaterPhotoTypesCaptured(form) {
 
 export function isWaterFormReadyToSubmit(form, _maxPhotos = 4) {
   const s = waterFormFieldStatus(form);
-  return (
+  const baseReady =
     form.userValidated &&
     s.vendor &&
     s.date &&
@@ -194,12 +241,37 @@ export function isWaterFormReadyToSubmit(form, _maxPhotos = 4) {
     s.opening &&
     s.closing &&
     s.tds &&
-    s.vehicle &&
-    allWaterPhotoTypesCaptured(form) &&
-    (form.photos ?? []).every(
-      (p) => p.capturedAt && p.scanStatus === 'done' && photoHasGps(p),
-    )
-  );
+    s.vehicle;
+
+  if (!baseReady) return false;
+
+  const photos = form.photos ?? [];
+  if (photos.length === 0) {
+    // Manual entry — all readings typed, no photos required.
+    return true;
+  }
+
+  // Any attached photos must finish scanning and include GPS.
+  return photos.every((p) => {
+    if (p.scanStatus === 'scanning') return false;
+    if (!p.capturedAt) return false;
+    return photoHasGps(p);
+  });
+}
+
+export function waterFormSubmitHint(form) {
+  const s = waterFormFieldStatus(form);
+  if (!s.vendor) return 'Select vendor to submit';
+  if (!s.date || !s.time) return 'Enter date and time to submit';
+  if (!s.vehicle || !s.tds || !s.opening || !s.closing) {
+    return 'Fill all readings to submit';
+  }
+  if (!form.userValidated) return 'Confirm readings to submit';
+  const scanning = (form.photos ?? []).some((p) => p.scanStatus === 'scanning');
+  if (scanning) return 'Wait for photo scan to finish';
+  const missingGps = (form.photos ?? []).some((p) => !photoHasGps(p));
+  if (missingGps) return 'Retake photos with GPS enabled';
+  return 'Submit entry';
 }
 
 export function clearFieldFromRemovedPhoto(form, photo) {

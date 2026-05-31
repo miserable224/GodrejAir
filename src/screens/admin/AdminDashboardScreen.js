@@ -79,7 +79,8 @@ import {
   formatGeoCaption,
   locationLabelFromPhoto,
   pickGeoPhotoForDuty,
-  pickGeoPhotoFromCamera,
+  pickCameraPhotoImmediate,
+  attachGeoToPhoto,
   photoHasGps,
   alertGpsRequired,
 } from '../../utils/geoPhoto';
@@ -101,6 +102,7 @@ import {
   computeWaterLoad,
   createEmptyWaterForm,
   isWaterFormReadyToSubmit,
+  nextWaterPhotoCaptureType,
 } from '../../utils/waterFormHelpers';
 import { HK, WATER } from '../../constants/moduleThemes';
 import { ensureValidAccessToken } from '../../modules/shared';
@@ -1485,10 +1487,12 @@ export default function AdminDashboardScreen({ navigation, route }) {
     }
 
     try {
-      const geoPhoto = await pickGeoPhotoFromCamera();
-      if (!geoPhoto?.uri) return;
+      const capture = await pickCameraPhotoImmediate();
+      if (!capture?.photo?.uri) return;
 
+      const { photo: snap, photoBase } = capture;
       const photoId = `water-ph-${Date.now()}`;
+      const expectedCaptureType = nextWaterPhotoCaptureType(waterForm);
       const captureIndex = waterForm.photos?.length ?? 0;
       const filledFields = {
         opening: Boolean(waterForm.openingMeter?.trim()),
@@ -1497,6 +1501,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
         vehicle: Boolean(waterForm.vehicleNo?.trim()),
       };
 
+      // Show preview immediately — GPS + OCR run afterward without blocking the thumbnail.
       setWaterForm((prev) => ({
         ...prev,
         userValidated: false,
@@ -1504,13 +1509,37 @@ export default function AdminDashboardScreen({ navigation, route }) {
           ...(prev.photos ?? []),
           {
             id: photoId,
-            ...geoPhoto,
+            ...snap,
+            expectedCaptureType,
             scanStatus: 'scanning',
             detectedType: null,
             detectedValue: null,
           },
         ],
       }));
+
+      const geoPhoto = await attachGeoToPhoto(snap, photoBase);
+      setWaterForm((prev) => ({
+        ...prev,
+        photos: (prev.photos ?? []).map((p) =>
+          p.id === photoId
+            ? {
+                ...p,
+                uri: geoPhoto.uri || p.uri,
+                latitude: geoPhoto.latitude,
+                longitude: geoPhoto.longitude,
+                accuracy: geoPhoto.accuracy,
+                capturedAt: geoPhoto.capturedAt || p.capturedAt,
+              }
+            : p,
+        ),
+      }));
+
+      if (!photoHasGps(geoPhoto)) {
+        alertGpsRequired();
+      }
+
+      const scanUri = geoPhoto.uri || snap.uri;
 
       // Primary: route through the LLM (multimodal Llama 4 Scout via Groq).
       // Google Vision OCR is only tried if it is explicitly configured (real API
@@ -1520,7 +1549,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
       let result = null;
       let usedLlm = true;
       try {
-        result = await analyzeWaterPhotoWithLLM(geoPhoto.uri, captureIndex, filledFields);
+        result = await analyzeWaterPhotoWithLLM(scanUri, captureIndex, filledFields);
       } catch (llmErr) {
         console.warn('[captureWaterPhoto LLM failed]', llmErr);
         result = null;
@@ -1531,7 +1560,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
         // otherwise leave the field empty and let the user type manually.
         usedLlm = false;
         try {
-          result = await analyzeWaterPhotoWithVisionAPI(geoPhoto.uri, captureIndex, filledFields);
+          result = await analyzeWaterPhotoWithVisionAPI(scanUri, captureIndex, filledFields);
         } catch (ocrErr) {
           console.warn('[captureWaterPhoto OCR unavailable]', ocrErr?.message);
           setWaterForm((prev) => ({
@@ -1548,6 +1577,16 @@ export default function AdminDashboardScreen({ navigation, route }) {
           );
           return;
         }
+      }
+
+      if (!result?.detectedType && expectedCaptureType) {
+        result = { ...result, detectedType: expectedCaptureType };
+      } else if (
+        result?.detectedValue &&
+        expectedCaptureType &&
+        result.detectedType !== expectedCaptureType
+      ) {
+        result = { ...result, detectedType: expectedCaptureType };
       }
 
       // Apply low-confidence policy: if the LLM is < 60% sure, still attach the
@@ -1666,7 +1705,7 @@ export default function AdminDashboardScreen({ navigation, route }) {
         missingGps ? 'GPS required on all photos' : 'Incomplete entry',
         missingGps
           ? 'Each photo must include GPS coordinates. Turn on location, then retake any photo that shows “GPS unavailable”.'
-          : 'Select vendor, capture 4 scanned photos with GPS, fill all readings, and confirm before submitting.',
+          : 'Select vendor, fill vehicle, TDS, starting and ending meter readings, confirm, then submit. Photos are optional.',
       );
       return;
     }
