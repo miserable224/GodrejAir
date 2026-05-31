@@ -1563,6 +1563,29 @@ export default function AdminDashboardScreen({ navigation, route }) {
           result = await analyzeWaterPhotoWithVisionAPI(scanUri, captureIndex, filledFields);
         } catch (ocrErr) {
           console.warn('[captureWaterPhoto OCR unavailable]', ocrErr?.message);
+          if (expectedCaptureType) {
+            setWaterForm((prev) => ({
+              ...prev,
+              photos: (prev.photos ?? []).map((p) =>
+                p.id === photoId
+                  ? {
+                      ...p,
+                      scanStatus: 'done',
+                      detectedType: expectedCaptureType,
+                      detectedValue: null,
+                      scanAutoRead: false,
+                    }
+                  : p,
+              ),
+            }));
+            showToast({
+              type: 'info',
+              title: 'Photo saved',
+              message:
+                'Auto-read unavailable. Type the value in readings, or tap the button again for the next photo.',
+            });
+            return;
+          }
           setWaterForm((prev) => ({
             ...prev,
             photos: (prev.photos ?? []).map((p) =>
@@ -1821,10 +1844,14 @@ export default function AdminDashboardScreen({ navigation, route }) {
       return;
     }
     const capacity = Number(waterVendorForm.tankerCapacityKl);
+    let capacityKl = Number.isFinite(capacity) && capacity > 0 ? capacity : null;
+    if (capacityKl != null && capacityKl >= 1000) {
+      capacityKl = capacityKl / 1000;
+    }
     try {
       const saved = await createWaterVendor({
         name: waterVendorForm.name.trim(),
-        tankerCapacityKl: Number.isFinite(capacity) && capacity > 0 ? capacity : null,
+        tankerCapacityKl: capacityKl,
       });
       setWaterVendors((cur) => [saved, ...cur]);
       setWaterForm((prev) => ({

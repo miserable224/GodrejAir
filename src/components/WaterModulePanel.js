@@ -622,11 +622,14 @@ export default function WaterModulePanel({
     return `${sign}₹${abs.toLocaleString('en-IN')}`;
   };
   const formatNum = (n) => Math.round(Number(n) || 0).toLocaleString('en-IN');
-  const formatKl = (n) => {
-    const v = Number(n) || 0;
-    if (Math.abs(v) >= 1000) return `${formatNum(v)} KL`;
-    return Number.isInteger(v) ? `${v} KL` : `${v.toFixed(1)} KL`;
+  const formatLitres = (litres) => `${formatNum(litres)} L`;
+  const formatLitresVariance = (litres) => {
+    const v = Math.round(Number(litres) || 0);
+    if (v === 0) return '0 L';
+    const sign = v > 0 ? '+' : '-';
+    return `${sign}${Math.abs(v).toLocaleString('en-IN')} L`;
   };
+  const declaredLitresPerLoad = metrics.waterDeclaredLitresPerLoad ?? 12500;
 
   return (
     <View style={s.shell}>
@@ -637,8 +640,8 @@ export default function WaterModulePanel({
           end={{ x: 1, y: 1 }}
           style={s.header}
         >
-          <Text style={s.headerTitle}>Vendor cost summary</Text>
-          <Text style={s.headerSub}>Declared vs measured KL & cost per tanker vendor</Text>
+          <Text style={s.headerTitle}>Vendor delivery summary</Text>
+          <Text style={s.headerSub}>Declared vs received litres per tanker vendor</Text>
         </LinearGradient>
 
         <View style={s.body}>
@@ -687,7 +690,7 @@ export default function WaterModulePanel({
               <Ionicons name="cube-outline" size={28} color={SEC.textMuted} />
               <Text style={s.emptyTitle}>No vendor data yet</Text>
               <Text style={s.emptySub}>
-                Record a tanker entry to start tracking declared vs measured costs.
+                Record a tanker entry to start tracking declared vs received litres.
               </Text>
               {onRefresh ? (
                 <TouchableOpacity
@@ -714,22 +717,20 @@ export default function WaterModulePanel({
                   <Text style={s.gridHeadCell}>Vendor</Text>
                 </View>
                 <View style={s.gridColNum}>
-                  <Text style={[s.gridHeadCell, s.gridHeadRight]}>Declared ₹</Text>
+                  <Text style={[s.gridHeadCell, s.gridHeadRight]}>Declared (L)</Text>
                 </View>
                 <View style={s.gridColNum}>
-                  <Text style={[s.gridHeadCell, s.gridHeadRight]}>Estimated ₹</Text>
+                  <Text style={[s.gridHeadCell, s.gridHeadRight]}>Received (L)</Text>
                 </View>
                 <View style={s.gridColNum}>
-                  <Text style={[s.gridHeadCell, s.gridHeadRight]}>Variance ₹</Text>
+                  <Text style={[s.gridHeadCell, s.gridHeadRight]}>Variance (L)</Text>
                 </View>
               </View>
 
               {/* Totals row — now lives inside the grid, on the same columns. */}
               {(() => {
                 const t = metrics.vendorSummaryTotals;
-                const dv = t.measuredKl - t.declaredKl;
-                const dc = t.measuredCost - t.declaredCost;
-                const isShort = dv < -0.001;
+                const isShort = t.varianceLitres < -1;
                 const tone = isShort ? SEC.red : SEC.green;
                 return (
                   <View style={[s.gridDataRow, s.gridTotalRow]}>
@@ -743,19 +744,17 @@ export default function WaterModulePanel({
                     </View>
                     <View style={s.gridColNum}>
                       <Text style={[s.gridCostMain, s.gridTotalLabel]}>
-                        {formatInrCompact(t.declaredCost)}
+                        {formatLitres(t.declaredLitres)}
                       </Text>
-                      <Text style={s.gridKlSub}>{formatKl(t.declaredKl)}</Text>
                     </View>
                     <View style={s.gridColNum}>
                       <Text style={[s.gridCostMain, s.gridTotalLabel]}>
-                        {formatInrCompact(t.measuredCost)}
+                        {formatLitres(t.measuredLitres)}
                       </Text>
-                      <Text style={s.gridKlSub}>{formatKl(t.measuredKl)}</Text>
                     </View>
                     <View style={s.gridColNum}>
                       <Text style={[s.gridValueVariance, s.gridTotalLabel, { color: tone }]}>
-                        {dc >= 0 ? '+' : ''}{formatInrCompact(dc)}
+                        {formatLitresVariance(t.varianceLitres)}
                       </Text>
                     </View>
                   </View>
@@ -766,9 +765,6 @@ export default function WaterModulePanel({
               <View style={s.gridSubHead}>
                 <Text style={s.gridSubHeadText}>By vendor</Text>
                 <View style={s.gridSubHeadRight}>
-                  <Text style={s.gridTariffMini}>
-                    Tariff ₹{metrics.waterRatePerKl ?? 130}/KL
-                  </Text>
                   {onRefresh ? (
                     <TouchableOpacity
                       onPress={onRefresh}
@@ -787,7 +783,7 @@ export default function WaterModulePanel({
               </View>
 
               {metrics.vendorSummary.map((row, idx) => {
-                const shortfall = row.varianceKl < -0.001;
+                const shortfall = row.varianceLitres < -1;
                 const isLast = idx === metrics.vendorSummary.length - 1;
                 return (
                   <View
@@ -800,21 +796,18 @@ export default function WaterModulePanel({
                       </Text>
                       <Text style={s.gridVendorMeta} numberOfLines={1}>
                         {row.vehicleNo || '—'} · {row.loads} load
-                        {row.loads === 1 ? '' : 's'} · {formatKl(row.capacityKl)}/load
+                        {row.loads === 1 ? '' : 's'} ·{' '}
+                        {formatLitres(row.declaredLitresPerLoad ?? declaredLitresPerLoad)}/load
                       </Text>
                     </View>
 
                     <View style={s.gridColNum}>
-                      <Text style={s.gridCostMain}>{formatInrCompact(row.declaredCost)}</Text>
-                      <Text style={s.gridKlSub}>{formatKl(row.declaredKl)}</Text>
+                      <Text style={s.gridCostMain}>{formatLitres(row.declaredLitres)}</Text>
                     </View>
 
                     <View style={s.gridColNum}>
                       <Text style={[s.gridCostMain, shortfall && { color: SEC.red }]}>
-                        {formatInrCompact(row.measuredCost)}
-                      </Text>
-                      <Text style={[s.gridKlSub, shortfall && { color: SEC.red }]}>
-                        {formatKl(row.measuredKl)}
+                        {formatLitres(row.measuredLitres)}
                       </Text>
                     </View>
 
@@ -825,7 +818,7 @@ export default function WaterModulePanel({
                           { color: shortfall ? SEC.red : SEC.green },
                         ]}
                       >
-                        {row.varianceCost >= 0 ? '+' : ''}{formatInrCompact(row.varianceCost)}
+                        {formatLitresVariance(row.varianceLitres)}
                       </Text>
                     </View>
                   </View>

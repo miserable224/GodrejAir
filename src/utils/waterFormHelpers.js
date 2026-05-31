@@ -88,12 +88,34 @@ function parseMeterNum(value) {
   return parseFloat(String(value).replace(/,/g, '').replace(/\s/g, ''));
 }
 
+/**
+ * Normalize a reading to kilolitres (1 KL = 1000 L).
+ * Values ≥ 1000 are treated as litres (e.g. 12500 → 12.5 KL).
+ */
+export function normalizeToKl(raw) {
+  const n = parseMeterNum(raw);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  if (n >= 1000) return n / 1000;
+  return n;
+}
+
+/** Measured delivery volume (KL) from meter delta, else stored load field. */
+export function measuredKlFromRecord(record) {
+  const opening = parseMeterNum(record?.openingMeter);
+  const closing = parseMeterNum(record?.closingMeter);
+  if (Number.isFinite(opening) && Number.isFinite(closing) && closing > opening) {
+    return normalizeToKl(closing - opening);
+  }
+  return normalizeToKl(record?.load);
+}
+
 export function computeWaterLoad(openingMeter, closingMeter) {
   const o = parseMeterNum(openingMeter);
   const c = parseMeterNum(closingMeter);
   if (!Number.isFinite(o) || !Number.isFinite(c) || c < o) return '';
-  const delta = c - o;
-  return Number.isInteger(delta) ? String(delta) : delta.toFixed(1);
+  const kl = normalizeToKl(c - o);
+  if (kl <= 0) return '';
+  return Number.isInteger(kl) ? String(kl) : kl.toFixed(1);
 }
 
 /**
@@ -209,14 +231,18 @@ export function waterFormFieldStatus(form) {
 }
 
 /**
- * Tells which of the 4 mandatory photo types have been captured AND
- * successfully scanned. A photo only counts if scanStatus === 'done'
- * and its detectedType matches the expected type.
+ * Tells which of the 4 guided photo slots have been captured.
+ * Counts a slot when scan succeeded, or when the user took the photo in-sequence
+ * (expectedCaptureType) even if auto-read failed — so the flow advances to TDS, etc.
  */
 export function waterPhotoTypeStatus(form) {
   const photos = form.photos ?? [];
   const has = (type) =>
-    photos.some((p) => p.scanStatus === 'done' && p.detectedType === type);
+    photos.some((p) => {
+      if (!p?.uri || p.scanStatus === 'scanning') return false;
+      if (p.scanStatus === 'done' && p.detectedType === type) return true;
+      return p.expectedCaptureType === type;
+    });
   return {
     opening: has(WATER_PHOTO_TYPES.OPENING),
     closing: has(WATER_PHOTO_TYPES.CLOSING),
