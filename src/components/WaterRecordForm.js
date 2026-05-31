@@ -10,6 +10,7 @@ import {
   Modal,
   Pressable,
   ScrollView,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
@@ -20,23 +21,49 @@ import {
   WATER_PHOTO_TYPE_LABELS,
   WATER_PHOTO_TYPE_ICONS,
 } from '../constants/waterPhotoTypes';
-import { formatGeoCaption } from '../utils/geoPhoto';
+import { formatGeoCaption, resolvePhotoUri } from '../utils/geoPhoto';
 import { formatVendorPlates } from '../utils/waterVehiclePlates';
 import {
   waterFormFieldStatus,
-  waterPhotoTypeStatus,
   allWaterPhotoTypesCaptured,
+  nextMissingWaterPhotoChecklistItem,
+  waterPhotoTypesCapturedCount,
+  waterFormSubmitHint,
 } from '../utils/waterFormHelpers';
-import { WATER_PHOTO_TYPES } from '../constants/waterPhotoTypes';
 
 const wf = buildModuleFormStyles(SEC);
 const W_PLACEHOLDER = SEC.textDim;
 
-const CHECKLIST = [
-  { type: WATER_PHOTO_TYPES.OPENING, label: 'Starting meter', icon: 'speedometer-outline', hint: 'Reading BEFORE fill' },
-  { type: WATER_PHOTO_TYPES.CLOSING, label: 'Ending meter', icon: 'speedometer', hint: 'Reading AFTER fill' },
-  { type: WATER_PHOTO_TYPES.TDS, label: 'TDS', icon: 'water-outline', hint: 'Hand-held TDS meter' },
-  { type: WATER_PHOTO_TYPES.VEHICLE, label: 'Vehicle number', icon: 'car-outline', hint: 'Tanker number plate' },
+const READING_FIELDS = [
+  {
+    key: 'vehicleNo',
+    label: 'Vehicle number',
+    icon: 'car-outline',
+    statusKey: 'vehicle',
+    keyboardType: 'default',
+    upper: true,
+  },
+  {
+    key: 'tds',
+    label: 'TDS',
+    icon: 'water-outline',
+    statusKey: 'tds',
+    keyboardType: 'numeric',
+  },
+  {
+    key: 'openingMeter',
+    label: 'Starting meter',
+    icon: 'speedometer-outline',
+    statusKey: 'opening',
+    keyboardType: 'numeric',
+  },
+  {
+    key: 'closingMeter',
+    label: 'Ending meter',
+    icon: 'speedometer',
+    statusKey: 'closing',
+    keyboardType: 'numeric',
+  },
 ];
 
 function SectionHeader({ step, title, complete }) {
@@ -62,7 +89,7 @@ function SectionHeader({ step, title, complete }) {
   );
 }
 
-function FieldRow({ label, value, onChangeText, icon, filled, keyboardType = 'default' }) {
+function FieldRow({ label, value, onChangeText, icon, filled, keyboardType = 'default', pendingLabel = 'Required' }) {
   return (
     <View style={localStyles.fieldRow}>
       <View style={localStyles.fieldLabelRow}>
@@ -73,7 +100,7 @@ function FieldRow({ label, value, onChangeText, icon, filled, keyboardType = 'de
             <Ionicons name="checkmark-circle" size={14} color="#4ADE80" />
           </View>
         ) : (
-          <Text style={localStyles.fieldPending}>Awaiting photo</Text>
+          <Text style={localStyles.fieldPending}>{pendingLabel}</Text>
         )}
       </View>
       <TextInput
@@ -103,24 +130,16 @@ export function WaterRecordForm({
   const [vendorPickerOpen, setVendorPickerOpen] = useState(false);
   const selectedVendor = vendors.find((v) => v.id === form.tankerVendorId);
   const fieldStatus = useMemo(() => waterFormFieldStatus(form), [form]);
-  const photoTypeStatus = useMemo(() => waterPhotoTypeStatus(form), [form]);
-  const typesCapturedCount =
-    (photoTypeStatus.opening ? 1 : 0) +
-    (photoTypeStatus.closing ? 1 : 0) +
-    (photoTypeStatus.tds ? 1 : 0) +
-    (photoTypeStatus.vehicle ? 1 : 0);
+  const typesCapturedCount = waterPhotoTypesCapturedCount(form);
   const allPhotosCaptured = allWaterPhotoTypesCaptured(form);
   const canCapture = Boolean(form.tankerVendorId) && !allPhotosCaptured;
   const allFieldsFilled =
     fieldStatus.opening && fieldStatus.closing && fieldStatus.tds && fieldStatus.vehicle;
   const dateTimeFilled = fieldStatus.date && fieldStatus.time;
   const vendorPicked = Boolean(form.tankerVendorId);
-
-  const nextMissingType = CHECKLIST.find((c) => !photoTypeStatus[
-    c.type === WATER_PHOTO_TYPES.OPENING ? 'opening' :
-    c.type === WATER_PHOTO_TYPES.CLOSING ? 'closing' :
-    c.type === WATER_PHOTO_TYPES.TDS ? 'tds' : 'vehicle'
-  ]);
+  const nextMissingType = nextMissingWaterPhotoChecklistItem(form);
+  const submitHint = waterFormSubmitHint(form);
+  const readingsFilledCount = READING_FIELDS.filter((f) => fieldStatus[f.statusKey]).length;
 
   return (
     <>
@@ -145,7 +164,7 @@ export function WaterRecordForm({
             <View style={localStyles.formFooterSubmit}>
               <ModuleSaveButton
                 theme={WATER}
-                label={submitDisabled ? 'Complete all 4 photos to submit' : 'Submit entry'}
+                label={submitDisabled ? submitHint : 'Submit entry'}
                 onPress={onSave}
                 disabled={submitDisabled}
               />
@@ -196,9 +215,12 @@ export function WaterRecordForm({
 
         <SectionHeader
           step={3}
-          title={`Photos (${typesCapturedCount}/4)`}
+          title={`Photos optional (${typesCapturedCount}/4)`}
           complete={allPhotosCaptured}
         />
+        <Text style={localStyles.manualHint}>
+          Capture in order — vehicle, TDS, starting meter, ending meter — or type all readings below.
+        </Text>
         <TouchableOpacity
           style={[
             localStyles.captureBtn,
@@ -272,13 +294,20 @@ export function WaterRecordForm({
               return (
                 <View key={photo.id} style={localStyles.photoCard}>
                   <View style={localStyles.thumbWrap}>
-                    <Image source={{ uri: photo.uri }} style={localStyles.thumb} />
+                    <Image source={{ uri: resolvePhotoUri(photo) }} style={localStyles.thumb} />
                     {isScanning ? (
                       <View style={localStyles.scanOverlay}>
-                        <BlurView intensity={45} tint="dark" style={localStyles.scanGlass}>
-                          <ActivityIndicator size="small" color={SEC.teal} />
-                          <Text style={localStyles.scanText}>Scanning…</Text>
-                        </BlurView>
+                        {Platform.OS === 'web' ? (
+                          <View style={localStyles.scanGlass}>
+                            <ActivityIndicator size="small" color={SEC.teal} />
+                            <Text style={localStyles.scanText}>Scanning…</Text>
+                          </View>
+                        ) : (
+                          <BlurView intensity={45} tint="dark" style={localStyles.scanGlass}>
+                            <ActivityIndicator size="small" color={SEC.teal} />
+                            <Text style={localStyles.scanText}>Scanning…</Text>
+                          </BlurView>
+                        )}
                       </View>
                     ) : null}
                     {isDone && typeLabel ? (
@@ -350,91 +379,73 @@ export function WaterRecordForm({
           </View>
         ) : (
           <Text style={localStyles.photoHint}>
-            Each photo stores GPS + timestamp. OCR detects meter, TDS, or plate automatically.
+            Photos store GPS + timestamp. OCR can auto-fill readings, or enter values manually below.
           </Text>
-        )}
-
-        {allPhotosCaptured ? (
-          <>
-            <SectionHeader title="Readings" complete={allFieldsFilled} />
-            <TouchableOpacity
-              onPress={() =>
-                setForm((p) => ({
-                  ...p,
-                  openingMeter: '',
-                  closingMeter: '',
-                  tds: '',
-                  vehicleNo: '',
-                  load: '',
-                  userValidated: false,
-                }))
-              }
-              hitSlop={6}
-              style={localStyles.clearReadingsBtnInline}
-            >
-              <Ionicons name="refresh-outline" size={12} color="#F87171" />
-              <Text style={localStyles.clearReadings}>Clear all readings</Text>
-            </TouchableOpacity>
-            <FieldRow
-              label="Starting meter"
-              icon="speedometer-outline"
-              filled={fieldStatus.opening}
-              value={form.openingMeter}
-              keyboardType="numeric"
-              onChangeText={(v) =>
-                setForm((p) => ({ ...p, openingMeter: v, userValidated: false }))
-              }
-            />
-            <FieldRow
-              label="Ending meter"
-              icon="speedometer"
-              filled={fieldStatus.closing}
-              value={form.closingMeter}
-              keyboardType="numeric"
-              onChangeText={(v) =>
-                setForm((p) => ({ ...p, closingMeter: v, userValidated: false }))
-              }
-            />
-            <FieldRow
-              label="TDS"
-              icon="water-outline"
-              filled={fieldStatus.tds}
-              value={form.tds}
-              keyboardType="numeric"
-              onChangeText={(v) => setForm((p) => ({ ...p, tds: v, userValidated: false }))}
-            />
-            <FieldRow
-              label="Vehicle number"
-              icon="car-outline"
-              filled={fieldStatus.vehicle}
-              value={form.vehicleNo}
-              onChangeText={(v) =>
-                setForm((p) => ({ ...p, vehicleNo: v.toUpperCase(), userValidated: false }))
-              }
-            />
-          </>
-        ) : (
-          <View style={localStyles.readingsLocked}>
-            <Ionicons name="lock-closed-outline" size={18} color={SEC.textMuted} />
-            <View style={{ flex: 1 }}>
-              <Text style={localStyles.readingsLockedTitle}>
-                Readings unlock after all 4 photos
-              </Text>
-              <Text style={localStyles.readingsLockedHint}>
-                {typesCapturedCount > 0
-                  ? `${4 - typesCapturedCount} more photo${4 - typesCapturedCount === 1 ? '' : 's'} to go${nextMissingType ? ` — next: ${nextMissingType.label.toLowerCase()}` : ''}.`
-                  : 'Start by tapping the camera button above.'}
-              </Text>
-            </View>
-          </View>
         )}
 
         <SectionHeader
           step={4}
+          title={`Readings (${readingsFilledCount}/4)`}
+          complete={allFieldsFilled}
+        />
+        <TouchableOpacity
+          onPress={() =>
+            setForm((p) => ({
+              ...p,
+              vehicleNo: '',
+              openingMeter: '',
+              closingMeter: '',
+              tds: '',
+              load: '',
+              userValidated: false,
+            }))
+          }
+          hitSlop={6}
+          style={localStyles.clearReadingsBtnInline}
+        >
+          <Ionicons name="refresh-outline" size={12} color="#F87171" />
+          <Text style={localStyles.clearReadings}>Clear all readings</Text>
+        </TouchableOpacity>
+        {READING_FIELDS.map((field) => (
+          <FieldRow
+            key={field.key}
+            label={field.label}
+            icon={field.icon}
+            filled={fieldStatus[field.statusKey]}
+            value={form[field.key]}
+            keyboardType={field.keyboardType}
+            pendingLabel="Enter value"
+            onChangeText={(v) =>
+              setForm((p) => ({
+                ...p,
+                [field.key]: field.upper ? v.toUpperCase() : v,
+                userValidated: false,
+              }))
+            }
+          />
+        ))}
+
+        <SectionHeader
+          step={5}
           title="Confirm"
-          complete={form.userValidated && allPhotosCaptured && allFieldsFilled}
+          complete={form.userValidated && allFieldsFilled}
         />
         <View style={localStyles.statusGrid}>
+          <View
+            style={[
+              localStyles.statusPill,
+              allFieldsFilled && localStyles.statusPillDone,
+            ]}
+          >
+            <Ionicons
+              name={allFieldsFilled ? 'checkmark-circle' : 'ellipse-outline'}
+              size={14}
+              color={allFieldsFilled ? '#4ADE80' : SEC.textDim}
+            />
+            <Text style={localStyles.statusPillText}>
+              Readings {readingsFilledCount}/4
+            </Text>
+          </View>
           <View
             style={[
               localStyles.statusPill,
@@ -450,42 +461,25 @@ export function WaterRecordForm({
               Photos {typesCapturedCount}/4
             </Text>
           </View>
-          <View
-            style={[
-              localStyles.statusPill,
-              allFieldsFilled && localStyles.statusPillDone,
-            ]}
-          >
-            <Ionicons
-              name={allFieldsFilled ? 'checkmark-circle' : 'ellipse-outline'}
-              size={14}
-              color={allFieldsFilled ? '#4ADE80' : SEC.textDim}
-            />
-            <Text style={localStyles.statusPillText}>
-              Readings {Object.values(fieldStatus).filter((v, i) => i < 4 && v).length}/4
-            </Text>
-          </View>
         </View>
 
-        {!allPhotosCaptured && (
+        {!allFieldsFilled ? (
           <View style={localStyles.warningRow}>
             <Ionicons name="warning-outline" size={14} color="#F59E0B" />
             <Text style={localStyles.warningText}>
-              {nextMissingType
-                ? `Missing: ${nextMissingType.label}. All 4 photos are required.`
-                : 'Capture all 4 photos before submitting.'}
+              Enter vehicle, TDS, starting meter, and ending meter to submit.
             </Text>
           </View>
-        )}
+        ) : null}
 
         <TouchableOpacity
           style={[localStyles.validateRow, form.userValidated && localStyles.validateRowActive]}
           onPress={() => {
-            if (!allFieldsFilled || !allPhotosCaptured) return;
+            if (!allFieldsFilled) return;
             setForm((p) => ({ ...p, userValidated: !p.userValidated }));
           }}
           activeOpacity={0.85}
-          disabled={!allFieldsFilled || !allPhotosCaptured}
+          disabled={!allFieldsFilled}
         >
           <Ionicons
             name={form.userValidated ? 'checkbox' : 'square-outline'}
@@ -833,6 +827,12 @@ const localStyles = StyleSheet.create({
     color: SEC.textMuted,
     marginTop: 8,
     marginBottom: 12,
+    lineHeight: 16,
+  },
+  manualHint: {
+    fontSize: 11,
+    color: SEC.textDim,
+    marginBottom: 10,
     lineHeight: 16,
   },
   photoGrid: {

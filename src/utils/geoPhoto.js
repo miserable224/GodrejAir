@@ -17,6 +17,16 @@ export function photoHasGps(photo) {
   );
 }
 
+/** URI for `<Image source={{ uri }} />` — handles web File blobs. */
+export function resolvePhotoUri(photo) {
+  if (!photo) return undefined;
+  if (photo.uri) return photo.uri;
+  if (Platform.OS === 'web' && photo.file && typeof URL !== 'undefined' && URL.createObjectURL) {
+    return URL.createObjectURL(photo.file);
+  }
+  return undefined;
+}
+
 /** User-facing alert when a verification photo has no GPS fix. */
 export function alertGpsRequired() {
   Alert.alert(
@@ -299,6 +309,60 @@ const CAMERA_PICKER_OPTIONS = {
 /** Duty check-in/out: live camera only (no gallery / file picker). */
 export async function pickGeoPhotoForDuty() {
   return pickGeoPhotoFromCamera({ dutyOnly: true, requireGps: true });
+}
+
+/**
+ * Open the camera and return a preview-ready photo immediately (no GPS wait).
+ * Call {@link attachGeoToPhoto} afterward to enrich coordinates without blocking the UI.
+ */
+export async function pickCameraPhotoImmediate() {
+  const camPerm = await ImagePicker.requestCameraPermissionsAsync();
+  if (!camPerm.granted) {
+    Alert.alert(
+      'Permission needed',
+      Platform.OS === 'web'
+        ? 'Allow camera access when the browser asks so you can take a verification photo.'
+        : 'Allow camera access to take a verification photo.',
+    );
+    return null;
+  }
+
+  let result;
+  try {
+    result = await ImagePicker.launchCameraAsync(CAMERA_PICKER_OPTIONS);
+  } catch {
+    Alert.alert(
+      'Camera unavailable',
+      'Could not open the camera. Enable camera permission and try again.',
+    );
+    return null;
+  }
+
+  if (result.canceled) return null;
+  const photoBase = photoFromPickerAsset(result.assets?.[0]);
+  if (!photoBase) return null;
+
+  const photo = buildGeoTaggedPhoto(
+    photoBase.uri,
+    { capturedAt: new Date().toISOString() },
+    photoBase.file,
+  );
+  return { photo, photoBase };
+}
+
+/** Attach GPS to a photo already shown in the UI (async, non-blocking for preview). */
+export async function attachGeoToPhoto(existingPhoto, photoBase, opts = {}) {
+  const enriched = await attachGeo(photoBase, { requireGps: false, ...opts });
+  if (!enriched) return existingPhoto;
+  return {
+    ...existingPhoto,
+    uri: enriched.uri || existingPhoto.uri,
+    file: enriched.file ?? existingPhoto.file,
+    latitude: enriched.latitude,
+    longitude: enriched.longitude,
+    accuracy: enriched.accuracy,
+    capturedAt: enriched.capturedAt || existingPhoto.capturedAt,
+  };
 }
 
 /**
