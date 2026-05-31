@@ -21,7 +21,7 @@ import {
   WATER_PHOTO_TYPE_LABELS,
   WATER_PHOTO_TYPE_ICONS,
 } from '../constants/waterPhotoTypes';
-import { formatGeoCaption, resolvePhotoUri } from '../utils/geoPhoto';
+import { resolvePhotoUri } from '../utils/geoPhoto';
 import { formatVendorPlates } from '../utils/waterVehiclePlates';
 import {
   waterFormFieldStatus,
@@ -37,77 +37,87 @@ const W_PLACEHOLDER = SEC.textDim;
 const READING_FIELDS = [
   {
     key: 'vehicleNo',
-    label: 'Vehicle number',
+    label: 'Vehicle no.',
+    shortLabel: 'Vehicle',
     icon: 'car-outline',
     statusKey: 'vehicle',
     keyboardType: 'default',
     upper: true,
+    placeholder: 'KA01AB1234',
   },
   {
     key: 'tds',
     label: 'TDS',
+    shortLabel: 'TDS',
     icon: 'water-outline',
     statusKey: 'tds',
     keyboardType: 'numeric',
+    placeholder: 'e.g. 245',
   },
   {
     key: 'openingMeter',
     label: 'Starting meter',
+    shortLabel: 'Start mtr',
     icon: 'speedometer-outline',
     statusKey: 'opening',
     keyboardType: 'numeric',
+    placeholder: 'Before fill',
   },
   {
     key: 'closingMeter',
     label: 'Ending meter',
+    shortLabel: 'End mtr',
     icon: 'speedometer',
     statusKey: 'closing',
     keyboardType: 'numeric',
+    placeholder: 'After fill',
   },
 ];
 
-function SectionHeader({ step, title, complete }) {
-  const numbered = step != null;
+const READING_ROWS = [
+  [READING_FIELDS[0], READING_FIELDS[1]],
+  [READING_FIELDS[2], READING_FIELDS[3]],
+];
+
+function SectionHeader({ step, title, complete, first = false }) {
   return (
-    <View style={localStyles.sectionHeader}>
-      {numbered ? (
-        <View
-          style={[
-            localStyles.sectionStepBadge,
-            complete && localStyles.sectionStepBadgeDone,
-          ]}
-        >
-          {complete ? (
-            <Ionicons name="checkmark" size={12} color="#0F172A" />
-          ) : (
-            <Text style={localStyles.sectionStepText}>{step}</Text>
-          )}
-        </View>
-      ) : null}
-      <Text style={localStyles.sectionHeaderText}>{title}</Text>
+    <View style={[localStyles.sectionHeader, first && localStyles.sectionHeaderFirst]}>
+      <View
+        style={[
+          localStyles.sectionStepBadge,
+          complete && localStyles.sectionStepBadgeDone,
+        ]}
+      >
+        {complete ? (
+          <Ionicons name="checkmark" size={11} color="#0F172A" />
+        ) : (
+          <Text style={localStyles.sectionStepText}>{step}</Text>
+        )}
+      </View>
+      <Text style={localStyles.sectionHeaderText} numberOfLines={1}>
+        {title}
+      </Text>
     </View>
   );
 }
 
-function FieldRow({ label, value, onChangeText, icon, filled, keyboardType = 'default', pendingLabel = 'Required' }) {
+function CompactField({ field, value, filled, onChangeText }) {
   return (
-    <View style={localStyles.fieldRow}>
-      <View style={localStyles.fieldLabelRow}>
-        <Ionicons name={icon} size={16} color={filled ? SEC.teal : SEC.textDim} />
-        <Text style={localStyles.fieldLabel}>{label}</Text>
+    <View style={localStyles.gridCell}>
+      <View style={localStyles.gridLabelRow}>
+        <Ionicons name={field.icon} size={13} color={filled ? SEC.teal : SEC.textDim} />
+        <Text style={localStyles.gridLabel} numberOfLines={1}>
+          {field.shortLabel}
+        </Text>
         {filled ? (
-          <View style={localStyles.fieldOkBadge}>
-            <Ionicons name="checkmark-circle" size={14} color="#4ADE80" />
-          </View>
-        ) : (
-          <Text style={localStyles.fieldPending}>{pendingLabel}</Text>
-        )}
+          <Ionicons name="checkmark-circle" size={12} color="#4ADE80" />
+        ) : null}
       </View>
       <TextInput
-        style={[wf.input, localStyles.fieldInput]}
-        placeholder={`Enter ${label.toLowerCase()}`}
+        style={[wf.input, localStyles.gridInput]}
+        placeholder={field.placeholder}
         placeholderTextColor={W_PLACEHOLDER}
-        keyboardType={keyboardType}
+        keyboardType={field.keyboardType}
         value={value}
         onChangeText={onChangeText}
       />
@@ -148,7 +158,7 @@ export function WaterRecordForm({
         onClose={onClose}
         title="Record tanker water"
         theme={WATER}
-        maxHeight="92%"
+        maxHeight="96%"
         footer={
           <View style={localStyles.formFooter}>
             <TouchableOpacity
@@ -172,55 +182,93 @@ export function WaterRecordForm({
           </View>
         }
       >
-        <SectionHeader step={1} title="Tanker vendor" complete={vendorPicked} />
-        <TouchableOpacity
-          style={[localStyles.select, !form.tankerVendorId && localStyles.selectEmpty]}
-          onPress={() => setVendorPickerOpen(true)}
-          activeOpacity={0.85}
-        >
-          <View style={localStyles.selectIconWrap}>
-            <Ionicons name="business" size={18} color={SEC.teal} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={localStyles.selectLabel}>
-              {selectedVendor ? 'Vendor' : 'Tap to select vendor'}
-            </Text>
+        {/* Step 1 — vendor + date/time in one compact block */}
+        <SectionHeader step={1} title="Vendor & date" complete={vendorPicked && dateTimeFilled} first />
+        <View style={localStyles.basicsCard}>
+          <TouchableOpacity
+            style={[localStyles.vendorRow, !form.tankerVendorId && localStyles.vendorRowEmpty]}
+            onPress={() => setVendorPickerOpen(true)}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="business" size={16} color={SEC.teal} />
             <Text
-              style={[localStyles.selectText, !selectedVendor && localStyles.selectPlaceholder]}
+              style={[localStyles.vendorText, !selectedVendor && localStyles.vendorPlaceholder]}
               numberOfLines={1}
             >
-              {selectedVendor?.name || `${vendors.length} vendor${vendors.length === 1 ? '' : 's'} available`}
+              {selectedVendor?.name || 'Select tanker vendor'}
             </Text>
+            <Ionicons name="chevron-down" size={16} color={SEC.textMuted} />
+          </TouchableOpacity>
+          <View style={localStyles.dateTimeRow}>
+            <TextInput
+              style={[wf.input, localStyles.dateInput]}
+              placeholder="DD/MM/YY"
+              placeholderTextColor={W_PLACEHOLDER}
+              value={form.date}
+              onChangeText={(v) => setForm((p) => ({ ...p, date: v, userValidated: false }))}
+            />
+            <TextInput
+              style={[wf.input, localStyles.timeInput]}
+              placeholder="Time"
+              placeholderTextColor={W_PLACEHOLDER}
+              value={form.time}
+              onChangeText={(v) => setForm((p) => ({ ...p, time: v, userValidated: false }))}
+            />
           </View>
-          <Ionicons name="chevron-forward" size={18} color={SEC.textMuted} />
-        </TouchableOpacity>
-
-        <SectionHeader step={2} title="Date & time" complete={dateTimeFilled} />
-        <View style={localStyles.dateTimeRow}>
-          <TextInput
-            style={[wf.input, localStyles.dateInput]}
-            placeholder="DD/MM/YY"
-            placeholderTextColor={W_PLACEHOLDER}
-            value={form.date}
-            onChangeText={(v) => setForm((p) => ({ ...p, date: v, userValidated: false }))}
-          />
-          <TextInput
-            style={[wf.input, localStyles.timeInput]}
-            placeholder="Time"
-            placeholderTextColor={W_PLACEHOLDER}
-            value={form.time}
-            onChangeText={(v) => setForm((p) => ({ ...p, time: v, userValidated: false }))}
-          />
         </View>
 
+        {/* Step 2 — manual readings 2×2 */}
+        <View style={localStyles.readingsHeaderRow}>
+          <SectionHeader
+            step={2}
+            title={`Readings (${readingsFilledCount}/4)`}
+            complete={allFieldsFilled}
+          />
+          <TouchableOpacity
+            onPress={() =>
+              setForm((p) => ({
+                ...p,
+                vehicleNo: '',
+                openingMeter: '',
+                closingMeter: '',
+                tds: '',
+                load: '',
+                userValidated: false,
+              }))
+            }
+            hitSlop={6}
+            style={localStyles.clearReadingsBtnInline}
+          >
+            <Ionicons name="refresh-outline" size={11} color="#F87171" />
+            <Text style={localStyles.clearReadings}>Clear</Text>
+          </TouchableOpacity>
+        </View>
+        {READING_ROWS.map((row, rowIdx) => (
+          <View key={`row-${rowIdx}`} style={localStyles.readingsRow}>
+            {row.map((field) => (
+              <CompactField
+                key={field.key}
+                field={field}
+                filled={fieldStatus[field.statusKey]}
+                value={form[field.key]}
+                onChangeText={(v) =>
+                  setForm((p) => ({
+                    ...p,
+                    [field.key]: field.upper ? v.toUpperCase() : v,
+                    userValidated: false,
+                  }))
+                }
+              />
+            ))}
+          </View>
+        ))}
+
+        {/* Step 3 — photos (compact) */}
         <SectionHeader
           step={3}
           title={`Photos optional (${typesCapturedCount}/4)`}
           complete={allPhotosCaptured}
         />
-        <Text style={localStyles.manualHint}>
-          Capture in order — vehicle, TDS, starting meter, ending meter — or type all readings below.
-        </Text>
         <TouchableOpacity
           style={[
             localStyles.captureBtn,
@@ -240,21 +288,9 @@ export function WaterRecordForm({
           disabled={allPhotosCaptured}
         >
           <Ionicons
-            name={
-              !vendorPicked
-                ? 'business'
-                : allPhotosCaptured
-                  ? 'checkmark-circle'
-                  : 'camera'
-            }
-            size={20}
-            color={
-              allPhotosCaptured
-                ? SEC.textDim
-                : !vendorPicked
-                  ? '#F59E0B'
-                  : '#0F172A'
-            }
+            name={!vendorPicked ? 'business' : allPhotosCaptured ? 'checkmark-circle' : 'camera'}
+            size={18}
+            color={allPhotosCaptured ? SEC.textDim : !vendorPicked ? '#F59E0B' : '#0F172A'}
           />
           <Text
             style={[
@@ -262,35 +298,39 @@ export function WaterRecordForm({
               !vendorPicked && localStyles.captureBtnTextPrompt,
               allPhotosCaptured && localStyles.captureBtnTextDisabled,
             ]}
+            numberOfLines={1}
           >
             {!vendorPicked
-              ? 'Tap to select vendor first'
+              ? 'Select vendor first'
               : allPhotosCaptured
-                ? 'All 4 photos captured ✓'
+                ? 'All 4 photos ✓'
                 : nextMissingType
-                  ? `Take ${nextMissingType.label.toLowerCase()} photo`
+                  ? `Photo: ${nextMissingType.label}`
                   : 'Take photo'}
           </Text>
         </TouchableOpacity>
 
         {(form.photos?.length ?? 0) > 0 ? (
-          <View style={localStyles.photoGrid}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={localStyles.photoStrip}
+            contentContainerStyle={localStyles.photoStripContent}
+          >
             {form.photos.map((photo) => {
               const isScanning = photo.scanStatus === 'scanning';
               const isDone = photo.scanStatus === 'done';
               const isFailed = photo.scanStatus === 'failed';
-              const typeLabel = photo.detectedType
-                ? WATER_PHOTO_TYPE_LABELS[photo.detectedType] || 'Detected'
+              const slotType = photo.detectedType || photo.expectedCaptureType;
+              const typeLabel = slotType
+                ? WATER_PHOTO_TYPE_LABELS[slotType] || 'Captured'
                 : null;
-              const typeIcon = photo.detectedType
-                ? WATER_PHOTO_TYPE_ICONS[photo.detectedType] || 'document-text-outline'
+              const typeIcon = slotType
+                ? WATER_PHOTO_TYPE_ICONS[slotType] || 'document-text-outline'
                 : 'help-circle-outline';
-
               const lowConf = photo.lowConfidence === true;
-              const confPct =
-                typeof photo.scanConfidence === 'number'
-                  ? Math.round(photo.scanConfidence * 100)
-                  : null;
+              const manualOnly = isDone && photo.scanAutoRead === false;
+
               return (
                 <View key={photo.id} style={localStyles.photoCard}>
                   <View style={localStyles.thumbWrap}>
@@ -300,12 +340,10 @@ export function WaterRecordForm({
                         {Platform.OS === 'web' ? (
                           <View style={localStyles.scanGlass}>
                             <ActivityIndicator size="small" color={SEC.teal} />
-                            <Text style={localStyles.scanText}>Scanning…</Text>
                           </View>
                         ) : (
                           <BlurView intensity={45} tint="dark" style={localStyles.scanGlass}>
                             <ActivityIndicator size="small" color={SEC.teal} />
-                            <Text style={localStyles.scanText}>Scanning…</Text>
                           </BlurView>
                         )}
                       </View>
@@ -315,38 +353,36 @@ export function WaterRecordForm({
                         style={[
                           localStyles.typeBadge,
                           lowConf && localStyles.typeBadgeWarn,
+                          manualOnly && localStyles.typeBadgeManual,
                         ]}
                       >
                         <Ionicons
                           name={lowConf ? 'alert-circle' : typeIcon}
-                          size={10}
-                          color={lowConf ? '#FEF3C7' : '#A7F3D0'}
+                          size={9}
+                          color={lowConf ? '#FEF3C7' : manualOnly ? '#BFDBFE' : '#A7F3D0'}
                         />
                         <Text style={localStyles.typeBadgeText} numberOfLines={1}>
-                          {typeLabel}
-                          {confPct != null ? ` · ${confPct}%` : ''}
+                          {manualOnly ? `${typeLabel} · manual` : typeLabel}
                         </Text>
                       </View>
                     ) : null}
-                    {isFailed ? (
+                    {isFailed && !slotType ? (
                       <View style={[localStyles.typeBadge, localStyles.typeBadgeError]}>
-                        <Text style={localStyles.typeBadgeText}>Scan failed</Text>
+                        <Text style={localStyles.typeBadgeText}>Failed</Text>
+                      </View>
+                    ) : null}
+                    {isFailed && slotType ? (
+                      <View style={[localStyles.typeBadge, localStyles.typeBadgeManual]}>
+                        <Ionicons name={typeIcon} size={9} color="#BFDBFE" />
+                        <Text style={localStyles.typeBadgeText} numberOfLines={1}>
+                          {typeLabel}
+                        </Text>
                       </View>
                     ) : null}
                   </View>
-                  <Text style={localStyles.photoMeta} numberOfLines={2}>
-                    {formatGeoCaption(photo)}
-                  </Text>
                   {photo.detectedValue ? (
-                    <Text
-                      style={[
-                        localStyles.detectedValue,
-                        lowConf && localStyles.detectedValueWarn,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      → {photo.detectedValue}
-                      {lowConf ? '  (verify)' : ''}
+                    <Text style={localStyles.detectedValue} numberOfLines={1}>
+                      {photo.detectedValue}
                     </Text>
                   ) : null}
                   <View style={localStyles.photoActionRow}>
@@ -356,10 +392,7 @@ export function WaterRecordForm({
                         onPress={() => onRescanPhoto(photo.id)}
                         hitSlop={8}
                       >
-                        <Ionicons name="refresh-outline" size={14} color={SEC.teal} />
-                        <Text style={[localStyles.actionBtnText, { color: SEC.teal }]}>
-                          Rescan
-                        </Text>
+                        <Ionicons name="refresh-outline" size={12} color={SEC.teal} />
                       </TouchableOpacity>
                     ) : null}
                     <TouchableOpacity
@@ -367,110 +400,39 @@ export function WaterRecordForm({
                       onPress={() => onRemovePhoto?.(photo.id)}
                       hitSlop={8}
                     >
-                      <Ionicons name="trash-outline" size={14} color="#F87171" />
-                      <Text style={[localStyles.actionBtnText, { color: '#F87171' }]}>
-                        Remove
-                      </Text>
+                      <Ionicons name="trash-outline" size={12} color="#F87171" />
                     </TouchableOpacity>
                   </View>
                 </View>
               );
             })}
-          </View>
-        ) : (
-          <Text style={localStyles.photoHint}>
-            Photos store GPS + timestamp. OCR can auto-fill readings, or enter values manually below.
-          </Text>
-        )}
+          </ScrollView>
+        ) : null}
 
+        {/* Step 4 — confirm */}
         <SectionHeader
           step={4}
-          title={`Readings (${readingsFilledCount}/4)`}
-          complete={allFieldsFilled}
-        />
-        <TouchableOpacity
-          onPress={() =>
-            setForm((p) => ({
-              ...p,
-              vehicleNo: '',
-              openingMeter: '',
-              closingMeter: '',
-              tds: '',
-              load: '',
-              userValidated: false,
-            }))
-          }
-          hitSlop={6}
-          style={localStyles.clearReadingsBtnInline}
-        >
-          <Ionicons name="refresh-outline" size={12} color="#F87171" />
-          <Text style={localStyles.clearReadings}>Clear all readings</Text>
-        </TouchableOpacity>
-        {READING_FIELDS.map((field) => (
-          <FieldRow
-            key={field.key}
-            label={field.label}
-            icon={field.icon}
-            filled={fieldStatus[field.statusKey]}
-            value={form[field.key]}
-            keyboardType={field.keyboardType}
-            pendingLabel="Enter value"
-            onChangeText={(v) =>
-              setForm((p) => ({
-                ...p,
-                [field.key]: field.upper ? v.toUpperCase() : v,
-                userValidated: false,
-              }))
-            }
-          />
-        ))}
-
-        <SectionHeader
-          step={5}
-          title="Confirm"
+          title="Confirm & submit"
           complete={form.userValidated && allFieldsFilled}
         />
         <View style={localStyles.statusGrid}>
-          <View
-            style={[
-              localStyles.statusPill,
-              allFieldsFilled && localStyles.statusPillDone,
-            ]}
-          >
+          <View style={[localStyles.statusPill, allFieldsFilled && localStyles.statusPillDone]}>
             <Ionicons
               name={allFieldsFilled ? 'checkmark-circle' : 'ellipse-outline'}
-              size={14}
+              size={13}
               color={allFieldsFilled ? '#4ADE80' : SEC.textDim}
             />
-            <Text style={localStyles.statusPillText}>
-              Readings {readingsFilledCount}/4
-            </Text>
+            <Text style={localStyles.statusPillText}>Readings {readingsFilledCount}/4</Text>
           </View>
-          <View
-            style={[
-              localStyles.statusPill,
-              allPhotosCaptured && localStyles.statusPillDone,
-            ]}
-          >
+          <View style={[localStyles.statusPill, allPhotosCaptured && localStyles.statusPillDone]}>
             <Ionicons
               name={allPhotosCaptured ? 'checkmark-circle' : 'ellipse-outline'}
-              size={14}
+              size={13}
               color={allPhotosCaptured ? '#4ADE80' : SEC.textDim}
             />
-            <Text style={localStyles.statusPillText}>
-              Photos {typesCapturedCount}/4
-            </Text>
+            <Text style={localStyles.statusPillText}>Photos {typesCapturedCount}/4</Text>
           </View>
         </View>
-
-        {!allFieldsFilled ? (
-          <View style={localStyles.warningRow}>
-            <Ionicons name="warning-outline" size={14} color="#F59E0B" />
-            <Text style={localStyles.warningText}>
-              Enter vehicle, TDS, starting meter, and ending meter to submit.
-            </Text>
-          </View>
-        ) : null}
 
         <TouchableOpacity
           style={[localStyles.validateRow, form.userValidated && localStyles.validateRowActive]}
@@ -483,11 +445,11 @@ export function WaterRecordForm({
         >
           <Ionicons
             name={form.userValidated ? 'checkbox' : 'square-outline'}
-            size={22}
+            size={20}
             color={form.userValidated ? SEC.teal : SEC.textDim}
           />
           <Text style={localStyles.validateText}>
-            I confirm all readings, photos, date/time, and vendor are correct
+            I confirm vendor, date, readings{typesCapturedCount > 0 ? ', photos' : ''}, and time
           </Text>
         </TouchableOpacity>
       </LedgerFormModal>
@@ -525,11 +487,6 @@ export function WaterRecordForm({
                     form.tankerVendorId === v.id && localStyles.pickerItemActive,
                   ]}
                   onPress={() => {
-                    // Intentionally do NOT auto-fill vehicleNo from the vendor's
-                    // stored plate — the vehicle field is the single source of
-                    // truth from the photo scan. Pre-filling it here marks it
-                    // as ✓ verified, which misleads the user when a different
-                    // tanker shows up today.
                     setForm((p) => ({
                       ...p,
                       tankerVendorId: v.id,
@@ -586,7 +543,7 @@ export function WaterVendorForm({ visible, onClose, form, setForm, onSave }) {
       />
       <TextInput
         style={wf.input}
-        placeholder="Tanker capacity (KL, optional)"
+        placeholder="Capacity in KL (e.g. 12.5 for 12500 L)"
         placeholderTextColor={W_PLACEHOLDER}
         keyboardType="decimal-pad"
         value={form.tankerCapacityKl}
@@ -597,28 +554,304 @@ export function WaterVendorForm({ visible, onClose, form, setForm, onSave }) {
 }
 
 const localStyles = StyleSheet.create({
-  selectIconWrap: {
-    width: 36,
-    height: 36,
+  sectionHeader: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  sectionHeaderFirst: {
+    marginTop: 0,
+  },
+  sectionStepBadge: {
+    width: 20,
+    height: 20,
     borderRadius: 10,
-    backgroundColor: 'rgba(62, 232, 197, 0.12)',
+    backgroundColor: SEC.surfaceRaised,
+    borderWidth: 1.5,
+    borderColor: 'rgba(62, 232, 197, 0.4)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  selectLabel: {
+  sectionStepBadgeDone: {
+    backgroundColor: SEC.teal,
+    borderColor: SEC.teal,
+  },
+  sectionStepText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: SEC.teal,
+  },
+  sectionHeaderText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '800',
+    color: SEC.text,
+    letterSpacing: 0.2,
+  },
+  basicsCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: SEC.border,
+    backgroundColor: SEC.surfaceRaised,
+    padding: 10,
+    marginBottom: 4,
+    gap: 8,
+  },
+  vendorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: SEC.bg,
+    borderWidth: 1,
+    borderColor: SEC.border,
+  },
+  vendorRowEmpty: {
+    borderColor: 'rgba(245, 158, 11, 0.45)',
+  },
+  vendorText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: SEC.text,
+  },
+  vendorPlaceholder: {
+    color: SEC.textDim,
+    fontWeight: '600',
+  },
+  dateTimeRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  dateInput: {
+    flex: 1.2,
+    marginBottom: 0,
+    paddingVertical: 10,
+    fontSize: 13,
+  },
+  timeInput: {
+    flex: 1,
+    marginBottom: 0,
+    paddingVertical: 10,
+    fontSize: 13,
+  },
+  readingsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  readingsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
+  },
+  gridCell: {
+    flex: 1,
+    minWidth: 0,
+  },
+  gridLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 4,
+  },
+  gridLabel: {
+    flex: 1,
     fontSize: 10,
     fontWeight: '700',
-    color: SEC.textDim,
+    color: SEC.textMuted,
     textTransform: 'uppercase',
-    letterSpacing: 0.4,
-    marginBottom: 2,
+    letterSpacing: 0.3,
+  },
+  gridInput: {
+    marginBottom: 0,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    fontSize: 13,
+  },
+  clearReadingsBtnInline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginTop: 12,
+    borderRadius: 6,
+    backgroundColor: 'rgba(248, 113, 113, 0.08)',
+  },
+  clearReadings: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#F87171',
+  },
+  captureBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 11,
+    borderRadius: 10,
+    backgroundColor: SEC.surfaceRaised,
+    borderWidth: 1,
+    borderColor: SEC.border,
+    marginBottom: 8,
   },
   captureBtnPrompt: {
     borderColor: 'rgba(245, 158, 11, 0.55)',
     backgroundColor: 'rgba(245, 158, 11, 0.1)',
   },
+  captureBtnActive: {
+    backgroundColor: SEC.teal,
+    borderColor: SEC.teal,
+  },
+  captureBtnDisabled: {
+    opacity: 0.55,
+  },
+  captureBtnText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
   captureBtnTextPrompt: {
     color: '#F59E0B',
+  },
+  captureBtnTextDisabled: {
+    color: SEC.textDim,
+  },
+  photoStrip: {
+    flexGrow: 0,
+    marginBottom: 8,
+  },
+  photoStripContent: {
+    gap: 8,
+    paddingRight: 4,
+  },
+  photoCard: {
+    width: 88,
+    backgroundColor: SEC.surfaceRaised,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: SEC.border,
+    padding: 6,
+  },
+  thumbWrap: {
+    width: '100%',
+    height: 72,
+    borderRadius: 8,
+    overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: 'rgba(0,0,0,0.25)',
+  },
+  thumb: {
+    width: '100%',
+    height: '100%',
+  },
+  scanOverlay: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  scanGlass: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(14, 18, 25, 0.6)',
+  },
+  typeBadge: {
+    position: 'absolute',
+    bottom: 3,
+    left: 3,
+    right: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: 'rgba(34, 197, 94, 0.9)',
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+  },
+  typeBadgeError: {
+    backgroundColor: 'rgba(239, 68, 68, 0.9)',
+  },
+  typeBadgeWarn: {
+    backgroundColor: 'rgba(245, 158, 11, 0.9)',
+  },
+  typeBadgeManual: {
+    backgroundColor: 'rgba(59, 130, 246, 0.88)',
+  },
+  typeBadgeText: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: '#ECFDF5',
+    flex: 1,
+  },
+  detectedValue: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: SEC.teal,
+    marginTop: 4,
+  },
+  photoActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 8,
+    marginTop: 4,
+  },
+  actionBtn: {
+    padding: 2,
+  },
+  statusGrid: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
+  },
+  statusPill: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 7,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: SEC.border,
+    backgroundColor: SEC.surfaceRaised,
+  },
+  statusPillDone: {
+    borderColor: 'rgba(74, 222, 128, 0.5)',
+    backgroundColor: 'rgba(74, 222, 128, 0.08)',
+  },
+  statusPillText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: SEC.text,
+  },
+  validateRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: SEC.border,
+    backgroundColor: SEC.bg,
+    marginBottom: 4,
+  },
+  validateRowActive: {
+    borderColor: 'rgba(62, 232, 197, 0.45)',
+    backgroundColor: 'rgba(62, 232, 197, 0.08)',
+  },
+  validateText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+    color: SEC.text,
+    lineHeight: 16,
   },
   emptyVendorBox: {
     paddingVertical: 32,
@@ -637,357 +870,6 @@ const localStyles = StyleSheet.create({
     color: SEC.textDim,
     textAlign: 'center',
     paddingHorizontal: 20,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginTop: 18,
-    marginBottom: 10,
-  },
-  sectionStepBadge: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: SEC.surfaceRaised,
-    borderWidth: 1.5,
-    borderColor: 'rgba(62, 232, 197, 0.4)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sectionStepBadgeDone: {
-    backgroundColor: SEC.teal,
-    borderColor: SEC.teal,
-  },
-  sectionStepText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: SEC.teal,
-  },
-  sectionHeaderText: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: '800',
-    color: SEC.text,
-    letterSpacing: 0.3,
-  },
-  captureBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    paddingVertical: 14,
-    borderRadius: 12,
-    backgroundColor: SEC.surfaceRaised,
-    borderWidth: 1,
-    borderColor: SEC.border,
-    marginBottom: 14,
-  },
-  captureBtnActive: {
-    backgroundColor: SEC.teal,
-    borderColor: SEC.teal,
-  },
-  captureBtnDisabled: {
-    opacity: 0.55,
-  },
-  captureBtnText: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#0F172A',
-    letterSpacing: 0.3,
-  },
-  captureBtnTextDisabled: {
-    color: SEC.textDim,
-  },
-  statusGrid: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 10,
-  },
-  statusPill: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: SEC.border,
-    backgroundColor: SEC.surfaceRaised,
-  },
-  statusPillDone: {
-    borderColor: 'rgba(74, 222, 128, 0.5)',
-    backgroundColor: 'rgba(74, 222, 128, 0.08)',
-  },
-  statusPillText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: SEC.text,
-  },
-  warningRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-    backgroundColor: 'rgba(245, 158, 11, 0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.35)',
-    marginBottom: 10,
-  },
-  warningText: {
-    flex: 1,
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#FCD34D',
-  },
-  readingsLocked: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    padding: 16,
-    marginTop: 12,
-    marginBottom: 8,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: SEC.border,
-    backgroundColor: 'rgba(15, 23, 42, 0.4)',
-    borderStyle: 'dashed',
-  },
-  readingsLockedTitle: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: SEC.textMuted,
-    marginBottom: 2,
-  },
-  readingsLockedHint: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: SEC.textDim,
-    lineHeight: 15,
-  },
-  clearReadingsBtnInline: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    alignSelf: 'flex-end',
-    marginTop: -4,
-    marginBottom: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    backgroundColor: 'rgba(248, 113, 113, 0.08)',
-  },
-  select: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: SEC.border,
-    backgroundColor: SEC.surfaceRaised,
-    marginBottom: 12,
-  },
-  selectEmpty: {
-    borderColor: 'rgba(245, 158, 11, 0.45)',
-  },
-  selectText: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '700',
-    color: SEC.text,
-  },
-  selectPlaceholder: {
-    color: SEC.textDim,
-    fontWeight: '600',
-  },
-  dateTimeRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 4,
-  },
-  dateInput: {
-    flex: 1.2,
-  },
-  timeInput: {
-    flex: 1,
-  },
-  uploadBtnDisabled: {
-    opacity: 0.55,
-  },
-  uploadBtnTextDisabled: {
-    color: SEC.textDim,
-  },
-  photoHint: {
-    fontSize: 11,
-    color: SEC.textMuted,
-    marginTop: 8,
-    marginBottom: 12,
-    lineHeight: 16,
-  },
-  manualHint: {
-    fontSize: 11,
-    color: SEC.textDim,
-    marginBottom: 10,
-    lineHeight: 16,
-  },
-  photoGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-    marginTop: 10,
-    marginBottom: 12,
-  },
-  photoCard: {
-    width: '48%',
-    backgroundColor: SEC.surfaceRaised,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: SEC.border,
-    padding: 8,
-  },
-  thumbWrap: {
-    width: '100%',
-    aspectRatio: 1.2,
-    borderRadius: 8,
-    overflow: 'hidden',
-    position: 'relative',
-    backgroundColor: 'rgba(0,0,0,0.25)',
-  },
-  thumb: {
-    width: '100%',
-    height: '100%',
-  },
-  scanOverlay: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  scanGlass: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(14, 18, 25, 0.6)',
-    gap: 6,
-  },
-  scanText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: SEC.teal,
-  },
-  typeBadge: {
-    position: 'absolute',
-    top: 4,
-    left: 4,
-    right: 4,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(34, 197, 94, 0.85)',
-    borderRadius: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-  },
-  typeBadgeError: {
-    backgroundColor: 'rgba(239, 68, 68, 0.85)',
-  },
-  typeBadgeWarn: {
-    backgroundColor: 'rgba(245, 158, 11, 0.9)',
-  },
-  typeBadgeText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: '#ECFDF5',
-    flex: 1,
-  },
-  photoMeta: {
-    fontSize: 9,
-    color: SEC.textMuted,
-    marginTop: 6,
-    lineHeight: 12,
-  },
-  detectedValue: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: SEC.teal,
-    marginTop: 2,
-  },
-  detectedValueWarn: {
-    color: '#F59E0B',
-  },
-  photoActionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    marginTop: 6,
-  },
-  actionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  actionBtnText: {
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  clearReadings: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#F87171',
-    textDecorationLine: 'underline',
-  },
-  fieldRow: {
-    marginBottom: 10,
-  },
-  fieldLabelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 6,
-  },
-  fieldLabel: {
-    flex: 1,
-    fontSize: 12,
-    fontWeight: '700',
-    color: SEC.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
-  fieldOkBadge: {
-    marginLeft: 'auto',
-  },
-  fieldPending: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: SEC.textDim,
-    marginLeft: 'auto',
-  },
-  fieldInput: {
-    marginBottom: 0,
-  },
-  validateRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    padding: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: SEC.border,
-    backgroundColor: SEC.bg,
-    marginBottom: 8,
-  },
-  validateRowActive: {
-    borderColor: 'rgba(62, 232, 197, 0.45)',
-    backgroundColor: 'rgba(62, 232, 197, 0.08)',
-  },
-  validateText: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: '600',
-    color: SEC.text,
-    lineHeight: 18,
   },
   pickerOverlay: {
     flex: 1,
@@ -1022,7 +904,6 @@ const localStyles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
     color: SEC.text,
-    marginBottom: 0,
   },
   pickerList: {
     maxHeight: 280,

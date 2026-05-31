@@ -15,6 +15,7 @@
 import { getSecurityApiOrigin, resolveSecurityApiOrigin } from '../modules/shared/config/apiConfig';
 import { fetchWithNetworkHint } from '../modules/shared/utils/networkError';
 import { ensureValidAccessToken, forceRefreshAccessToken } from '../modules/shared/services/authService';
+import { normalizeToKl } from '../utils/waterFormHelpers';
 
 function apiBase() {
   return `${getSecurityApiOrigin()}/api`;
@@ -72,7 +73,7 @@ function mapWaterVendor(v) {
     name: v.name,
     contactNumber: v.contactNumber ?? '',
     address: v.address ?? '',
-    tankerCapacityKl: Number(v.tankerCapacityKl) > 0 ? Number(v.tankerCapacityKl) : 6,
+    tankerCapacityKl: normalizeToKl(v.tankerCapacityKl) || 6,
     vehicles,
     vehicleNo: v.vehicleNo ?? activePlates[0] ?? '',
     vehicleNos: activePlates,

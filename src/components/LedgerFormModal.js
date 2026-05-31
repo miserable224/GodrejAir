@@ -206,7 +206,8 @@ function createStyles(theme, sheetMaxWidth = 400) {
       minHeight: 0,
     },
     scrollContent: {
-      paddingBottom: 8,
+      paddingBottom: 12,
+      flexGrow: 1,
     },
     bodyStatic: {
       flexShrink: 0,
