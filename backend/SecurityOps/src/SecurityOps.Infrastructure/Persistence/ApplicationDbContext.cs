@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Storage;
 using SecurityOps.Application.Common.Interfaces;
 using SecurityOps.Domain;
@@ -10,15 +11,40 @@ namespace SecurityOps.Infrastructure.Persistence;
 
 public sealed class ApplicationDbContext : DbContext, IApplicationDbContext
 {
+    /// <summary>Shadow column when legacy DB has both name and full_name NOT NULL.</summary>
+    internal const string SecurityStaffFullNameColumn = SecurityStaffColumns.FullNameLegacyShadow;
+
     public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
         : base(options)
     {
+    }
+
+    public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        SyncSecurityStaffLegacyNameColumns();
+        return await base.SaveChangesAsync(cancellationToken);
+    }
+
+    private void SyncSecurityStaffLegacyNameColumns()
+    {
+        foreach (var entry in ChangeTracker.Entries<SecurityStaff>())
+        {
+            if (entry.State is not (EntityState.Added or EntityState.Modified))
+                continue;
+
+            var displayName = entry.Entity.Name?.Trim();
+            if (string.IsNullOrEmpty(displayName))
+                continue;
+
+            entry.Property(SecurityStaffFullNameColumn).CurrentValue = displayName;
+        }
     }
 
     public Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default) =>
         Database.BeginTransactionAsync(cancellationToken);
 
     public DbSet<SecurityStaff> SecurityStaff => Set<SecurityStaff>();
+    public DbSet<DutyDesignation> DutyDesignations => Set<DutyDesignation>();
     public DbSet<SecurityLocation> SecurityLocations => Set<SecurityLocation>();
     public DbSet<SecurityShift> SecurityShifts => Set<SecurityShift>();
     public DbSet<SecurityShiftDeployment> SecurityShiftDeployments => Set<SecurityShiftDeployment>();
@@ -60,16 +86,30 @@ public sealed class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<SocietyDoc> SocietyDocs => Set<SocietyDoc>();
 
     public DbSet<WaterVendor> WaterVendors => Set<WaterVendor>();
+    public DbSet<WaterVendorVehicle> WaterVendorVehicles => Set<WaterVendorVehicle>();
     public DbSet<WaterRecord> WaterRecords => Set<WaterRecord>();
     public DbSet<WaterRecordPhoto> WaterRecordPhotos => Set<WaterRecordPhoto>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<DutyDesignation>(e =>
+        {
+            e.ToTable("duty_designations");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Module).HasMaxLength(32).IsRequired();
+            e.Property(x => x.Title).HasMaxLength(120).IsRequired();
+            e.HasIndex(x => new { x.Module, x.IsActive });
+        });
+
         modelBuilder.Entity<SecurityStaff>(e =>
         {
             e.ToTable("security_staff");
             e.HasKey(x => x.Id);
             e.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            // Legacy Supabase rows may require both name and full_name; synced in SaveChangesAsync.
+            e.Property<string>(SecurityStaffFullNameColumn)
+                .HasColumnName("full_name")
+                .HasMaxLength(200);
             e.Property(x => x.BadgeNumber).HasMaxLength(50);
             e.Property(x => x.Role).HasMaxLength(50).IsRequired();
             e.Property(x => x.Phone).HasMaxLength(30);
@@ -612,6 +652,25 @@ public sealed class ApplicationDbContext : DbContext, IApplicationDbContext
                 .HasColumnType("numeric")
                 .HasDefaultValue(6m);
             e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.HasIndex(x => x.VehicleNo);
+            e.HasMany(x => x.Vehicles)
+                .WithOne(x => x.Vendor)
+                .HasForeignKey(x => x.VendorId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<WaterVendorVehicle>(e =>
+        {
+            e.ToTable("water_vendor_vehicles");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.VendorId).HasColumnName("vendor_id");
+            e.Property(x => x.VehicleNo).HasColumnName("vehicle_no").HasMaxLength(20).IsRequired();
+            e.Property(x => x.IsActive).HasColumnName("is_active");
+            e.Property(x => x.Notes).HasColumnName("notes");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.DeactivatedAt).HasColumnName("deactivated_at");
+            e.HasIndex(x => new { x.VendorId, x.VehicleNo }).IsUnique();
             e.HasIndex(x => x.VehicleNo);
         });
 

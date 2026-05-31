@@ -18,7 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS, SIZES, DARK } from '../../constants/theme';
 import { useAuth } from '../../context/AuthContext';
 import ModulePhotoSection from '../../components/ModulePhotoSection';
-import { pickGeoPhotoForDuty } from '../../utils/geoPhoto';
+import { pickGeoPhotoForDuty, photoHasGps, alertGpsRequired } from '../../utils/geoPhoto';
 import {
   fetchOpenDutySession,
   fetchOnDutySessions,
@@ -167,7 +167,11 @@ export default function GuardDutyScreen({ navigation, route }) {
       return;
     }
     if (!photo?.uri && !photo?.file) {
-      Alert.alert('Photo required', 'Capture a check-in photo with GPS.');
+      Alert.alert('Photo required', 'Take a verification photo with the camera.');
+      return;
+    }
+    if (!photoHasGps(photo)) {
+      alertGpsRequired();
       return;
     }
 
@@ -204,6 +208,10 @@ export default function GuardDutyScreen({ navigation, route }) {
   const onCheckOut = async () => {
     if (!openSession?.id) {
       Alert.alert('Not on duty', 'No open check-in found for this guard.');
+      return;
+    }
+    if ((photo?.uri || photo?.file) && !photoHasGps(photo)) {
+      alertGpsRequired();
       return;
     }
 
@@ -338,7 +346,6 @@ export default function GuardDutyScreen({ navigation, route }) {
             photo={photo}
             onCamera={pickCamera}
             onRemovePhoto={() => setPhoto(null)}
-            cameraOnly
           />
 
           <View style={styles.dualActionRow}>

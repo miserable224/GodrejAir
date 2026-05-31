@@ -18,9 +18,13 @@ import {
   isSuperAdmin,
   isOperationsStaff,
   canAccessAdminDashboard,
+  canRecordSecurityPatrol,
+  canUseSecurityOps,
   getVisibleModuleIds,
   hasLimitedAdminNav,
   isModuleVisible,
+  isFieldOpsDashboardRole,
+  canExpandDashboardModule,
 } from '../constants/roles';
 
 const AuthContext = createContext(null);
@@ -159,7 +163,11 @@ export const AuthProvider = ({ children }) => {
       canManageSecurity: canAccessAdminDashboard(apiRole) || navRole === 'guard',
       visibleModuleIds: getVisibleModuleIds(apiRole),
       hasLimitedAdminNav: hasLimitedAdminNav(apiRole),
+      isFieldOpsDashboard: isFieldOpsDashboardRole(apiRole),
+      canExpandModule: (moduleId) => canExpandDashboardModule(moduleId, apiRole),
       canSeeModule: (moduleId) => isModuleVisible(moduleId, apiRole),
+      canUseSecurityOps: canUseSecurityOps(apiRole),
+      canRecordSecurityPatrol: canRecordSecurityPatrol(apiRole),
     }),
     [apiRole, navRole, user?.isDemo],
   );

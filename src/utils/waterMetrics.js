@@ -187,7 +187,15 @@ export function computeWaterDashboard({
     if (r.vendorId && vendorIndex.has(String(r.vendorId)))
       return vendorIndex.get(String(r.vendorId));
     if (r.vehicleNo) {
-      for (const v of vendorIndex.values()) if (v.vehicleNo === r.vehicleNo) return v;
+      const plate = String(r.vehicleNo).trim().toUpperCase().replace(/[\s-]+/g, '');
+      for (const v of vendorIndex.values()) {
+        if (v.vehicleNo && String(v.vehicleNo).replace(/[\s-]+/g, '') === plate) return v;
+        const fleet = v.vehicles ?? v.vehicleNos ?? [];
+        const list = Array.isArray(fleet)
+          ? fleet.map((x) => (typeof x === 'string' ? x : x?.vehicleNo))
+          : [];
+        if (list.some((p) => p && String(p).replace(/[\s-]+/g, '') === plate)) return v;
+      }
     }
     if (r.source) {
       for (const v of vendorIndex.values()) if (v.name === r.source) return v;
@@ -210,12 +218,17 @@ export function computeWaterDashboard({
         vendorId: v?.id ?? null,
         vendorName: name,
         vehicleNo: v?.vehicleNo ?? r.vehicleNo ?? null,
+        platesUsed: new Set(),
         capacityKl,
         loads: 0,
         measuredKl: 0,
       });
     }
     const row = vendorAgg.get(key);
+    if (r.vehicleNo) {
+      const p = String(r.vehicleNo).trim().toUpperCase().replace(/[\s-]+/g, '');
+      if (p) row.platesUsed.add(p);
+    }
     row.loads += loads;
     row.measuredKl += measuredKl;
   }
@@ -226,8 +239,14 @@ export function computeWaterDashboard({
       const measuredKl = row.measuredKl;
       const declaredCost = Math.round(declaredKl * WATER_RATE_PER_KL);
       const measuredCost = Math.round(measuredKl * WATER_RATE_PER_KL);
+      const platesLabel =
+        row.platesUsed?.size > 0
+          ? [...row.platesUsed].sort().join(', ')
+          : row.vehicleNo;
+      const { platesUsed, ...rest } = row;
       return {
-        ...row,
+        ...rest,
+        vehicleNo: platesLabel,
         declaredKl,
         measuredKl,
         declaredCost,

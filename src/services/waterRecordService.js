@@ -57,31 +57,66 @@ async function apiRequest(path, { method = 'GET', body, signal } = {}, retried =
 
 // ─── Vendors ──────────────────────────────────────────────────────────────
 
-export async function fetchWaterVendors({ signal } = {}) {
-  const list = await apiRequest('/water/vendors', { signal });
-  return Array.isArray(list)
-    ? list.map((v) => ({
-        id: v.id,
-        name: v.name,
-        contactNumber: v.contactNumber ?? '',
-        address: v.address ?? '',
-        vehicleNo: v.vehicleNo ?? '',
-        createdAt: v.createdAt,
+function mapWaterVendor(v) {
+  const vehicles = Array.isArray(v.vehicles)
+    ? v.vehicles.map((x) => ({
+        id: x.id,
+        vehicleNo: (x.vehicleNo ?? '').toUpperCase(),
+        isActive: x.isActive !== false,
+        notes: x.notes ?? null,
       }))
     : [];
+  const activePlates = vehicles.filter((x) => x.isActive).map((x) => x.vehicleNo);
+  return {
+    id: v.id,
+    name: v.name,
+    contactNumber: v.contactNumber ?? '',
+    address: v.address ?? '',
+    tankerCapacityKl: Number(v.tankerCapacityKl) > 0 ? Number(v.tankerCapacityKl) : 6,
+    vehicles,
+    vehicleNo: v.vehicleNo ?? activePlates[0] ?? '',
+    vehicleNos: activePlates,
+    createdAt: v.createdAt,
+  };
+}
+
+export async function fetchWaterVendors({ signal } = {}) {
+  const list = await apiRequest('/water/vendors', { signal });
+  return Array.isArray(list) ? list.map(mapWaterVendor) : [];
 }
 
 export async function createWaterVendor(vendor, { signal } = {}) {
-  return apiRequest('/water/vendors', {
+  const vehicleNos = Array.isArray(vendor.vehicleNos)
+    ? vendor.vehicleNos.filter(Boolean)
+    : vendor.vehicleNo
+      ? [vendor.vehicleNo]
+      : [];
+  const data = await apiRequest('/water/vendors', {
     method: 'POST',
     body: {
       name: vendor.name,
       contactNumber: vendor.contactNumber || null,
       address: vendor.address || null,
-      vehicleNo: vendor.vehicleNo || null,
+      vehicleNos: vehicleNos.length > 0 ? vehicleNos : null,
+      tankerCapacityKl: vendor.tankerCapacityKl ?? null,
     },
     signal,
   });
+  return mapWaterVendor(data);
+}
+
+export async function addWaterVendorVehicle(vendorId, vehicleNo, { signal, notes } = {}) {
+  const data = await apiRequest(`/water/vendors/${vendorId}/vehicles`, {
+    method: 'POST',
+    body: { vehicleNo, notes: notes || null },
+    signal,
+  });
+  return {
+    id: data.id,
+    vehicleNo: (data.vehicleNo ?? '').toUpperCase(),
+    isActive: data.isActive !== false,
+    notes: data.notes ?? null,
+  };
 }
 
 // ─── Records ──────────────────────────────────────────────────────────────
@@ -169,8 +204,54 @@ export async function fetchWaterRecordPhotos(recordId, { signal } = {}) {
   return Array.isArray(list) ? list : [];
 }
 
-export async function fetchWaterRecords({ days = 30, limit = 200, signal } = {}) {
-  const params = new URLSearchParams({ days: String(days), limit: String(limit) });
+/**
+ * Resolve `days` / `limit` for list API from dashboard filter chips.
+ * @returns {{ days: number, limit: number, skip?: boolean }}
+ */
+export function resolveWaterListQuery(waterFilter, customFrom = '', customTo = '') {
+  const today = new Date();
+  const dmyToDate = (s) => {
+    if (!s || typeof s !== 'string') return null;
+    const [d, m, y] = s.split('/').map((p) => Number(p));
+    if (!d || !m || Number.isNaN(y)) return null;
+    const full = y < 100 ? 2000 + y : y;
+    const dt = new Date(full, m - 1, d);
+    return Number.isNaN(dt.getTime()) ? null : dt;
+  };
+
+  if (waterFilter === 'today') {
+    return { days: 2, limit: 100 };
+  }
+  if (waterFilter === 'week') {
+    return { days: 8, limit: 200 };
+  }
+  if (waterFilter === 'month') {
+    return { days: 31, limit: 200 };
+  }
+  if (waterFilter === 'custom') {
+    const from = dmyToDate(customFrom);
+    const to = dmyToDate(customTo);
+    const earliest = from && to ? (from < to ? from : to) : from || to;
+    if (!earliest) {
+      return { days: 31, limit: 200, skip: true };
+    }
+    const diff = Math.ceil((today - earliest) / (1000 * 60 * 60 * 24)) + 1;
+    return { days: Math.min(365, Math.max(2, diff)), limit: 200 };
+  }
+  return { days: 31, limit: 200 };
+}
+
+export async function fetchWaterRecords({
+  days = 30,
+  limit = 200,
+  includePhotos = false,
+  signal,
+} = {}) {
+  const params = new URLSearchParams({
+    days: String(days),
+    limit: String(limit),
+    includePhotos: includePhotos ? 'true' : 'false',
+  });
   const list = await apiRequest(`/water/records?${params}`, { signal });
   return Array.isArray(list) ? list : [];
 }

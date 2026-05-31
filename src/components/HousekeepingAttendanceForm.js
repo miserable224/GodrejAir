@@ -17,7 +17,6 @@ export default function HousekeepingAttendanceForm({
   onChangeAttendance,
   photo,
   onPickCamera,
-  onPickGallery,
   onClearPhoto,
   onSave,
   saving,
@@ -71,7 +70,6 @@ export default function HousekeepingAttendanceForm({
         theme={HK}
         photo={photo}
         onCamera={onPickCamera}
-        onGallery={onPickGallery}
         onRemovePhoto={onClearPhoto}
       />
     </LedgerFormModal>

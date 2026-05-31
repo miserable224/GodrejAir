@@ -65,6 +65,19 @@ public sealed class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Ex
             {
                 return pg.SqlState switch
                 {
+                    PostgresErrorCodes.UniqueViolation => (
+                        HttpStatusCode.BadRequest,
+                        pg.ConstraintName?.Contains("duty_designations", StringComparison.OrdinalIgnoreCase) == true
+                            ? "A designation with this title already exists in this module. Edit or remove the existing one."
+                            : $"Duplicate value: {pg.MessageText}"),
+                    PostgresErrorCodes.NotNullViolation => (
+                        HttpStatusCode.BadRequest,
+                        $"Required field missing: {pg.ColumnName ?? pg.MessageText}"),
+                    PostgresErrorCodes.CheckViolation => (
+                        HttpStatusCode.BadRequest,
+                        pg.ConstraintName?.Contains("security_staff_role", StringComparison.OrdinalIgnoreCase) == true
+                            ? "That staff role is not allowed. Run Supabase migration 035_security_staff_hk_roles.sql, then retry."
+                            : $"Invalid value: {pg.MessageText}"),
                     PostgresErrorCodes.UndefinedTable => (
                         HttpStatusCode.ServiceUnavailable,
                         pg.MessageText.Contains("housekeeping_duty_sessions", StringComparison.OrdinalIgnoreCase)

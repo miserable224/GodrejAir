@@ -1,5 +1,7 @@
 export * from './services/securityService';
 export { useSecurityData } from './hooks/useSecurityData';
+export { useStaffRoster } from './hooks/useStaffRoster';
+export { useDutyDesignations } from './hooks/useDutyDesignations';
 export { useDeploymentQueue } from './hooks/useSecurityDeploymentQueue';
 export { resolveSecurityDateParams } from './utils/securityDateParams';
 export {
@@ -10,6 +12,10 @@ export {
 export {
   filterNamesAvailableForCheckIn,
   isStaffOnDuty,
+  rosterNamesForRoles,
+  rosterMembersForRoles,
+  normalizeStaffRole,
+  staffRoleMatchesAllowed,
 } from './utils/dutyStaffOptions';
 export {
   normalizeRoleKey,

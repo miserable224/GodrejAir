@@ -609,6 +609,18 @@ export default function WaterModulePanel({
     const sign = v < 0 ? '-' : '';
     return `${sign}₹${Math.abs(v).toLocaleString('en-IN')}`;
   };
+  // Compact Indian currency for tight grid cells on mobile.
+  //   ≥ 1 Cr  → ₹1.50Cr
+  //   ≥ 10 K  → ₹0.23L   (e.g. 22,880 → ₹0.23L; 1,37,280 → ₹1.37L)
+  //   < 10 K  → ₹5,200   (full digits — already short enough)
+  const formatInrCompact = (n) => {
+    const v = Math.round(Number(n) || 0);
+    const sign = v < 0 ? '-' : '';
+    const abs = Math.abs(v);
+    if (abs >= 10000000) return `${sign}₹${(abs / 10000000).toFixed(2)}Cr`;
+    if (abs >= 10000) return `${sign}₹${(abs / 100000).toFixed(2)}L`;
+    return `${sign}₹${abs.toLocaleString('en-IN')}`;
+  };
   const formatNum = (n) => Math.round(Number(n) || 0).toLocaleString('en-IN');
   const formatKl = (n) => {
     const v = Number(n) || 0;
@@ -731,19 +743,19 @@ export default function WaterModulePanel({
                     </View>
                     <View style={s.gridColNum}>
                       <Text style={[s.gridCostMain, s.gridTotalLabel]}>
-                        {formatInr(t.declaredCost)}
+                        {formatInrCompact(t.declaredCost)}
                       </Text>
                       <Text style={s.gridKlSub}>{formatKl(t.declaredKl)}</Text>
                     </View>
                     <View style={s.gridColNum}>
                       <Text style={[s.gridCostMain, s.gridTotalLabel]}>
-                        {formatInr(t.measuredCost)}
+                        {formatInrCompact(t.measuredCost)}
                       </Text>
                       <Text style={s.gridKlSub}>{formatKl(t.measuredKl)}</Text>
                     </View>
                     <View style={s.gridColNum}>
                       <Text style={[s.gridValueVariance, s.gridTotalLabel, { color: tone }]}>
-                        {dc >= 0 ? '+' : ''}{formatInr(dc)}
+                        {dc >= 0 ? '+' : ''}{formatInrCompact(dc)}
                       </Text>
                     </View>
                   </View>
@@ -793,13 +805,13 @@ export default function WaterModulePanel({
                     </View>
 
                     <View style={s.gridColNum}>
-                      <Text style={s.gridCostMain}>{formatInr(row.declaredCost)}</Text>
+                      <Text style={s.gridCostMain}>{formatInrCompact(row.declaredCost)}</Text>
                       <Text style={s.gridKlSub}>{formatKl(row.declaredKl)}</Text>
                     </View>
 
                     <View style={s.gridColNum}>
                       <Text style={[s.gridCostMain, shortfall && { color: SEC.red }]}>
-                        {formatInr(row.measuredCost)}
+                        {formatInrCompact(row.measuredCost)}
                       </Text>
                       <Text style={[s.gridKlSub, shortfall && { color: SEC.red }]}>
                         {formatKl(row.measuredKl)}
@@ -813,7 +825,7 @@ export default function WaterModulePanel({
                           { color: shortfall ? SEC.red : SEC.green },
                         ]}
                       >
-                        {row.varianceCost >= 0 ? '+' : ''}{formatInr(row.varianceCost)}
+                        {row.varianceCost >= 0 ? '+' : ''}{formatInrCompact(row.varianceCost)}
                       </Text>
                     </View>
                   </View>

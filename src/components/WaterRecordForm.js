@@ -14,13 +14,14 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import LedgerFormModal, { ModuleSaveButton } from './LedgerFormModal';
-import { SEC } from '../constants/moduleThemes';
+import { SEC, WATER } from '../constants/moduleThemes';
 import { buildModuleFormStyles } from '../styles/moduleFormStyles';
 import {
   WATER_PHOTO_TYPE_LABELS,
   WATER_PHOTO_TYPE_ICONS,
 } from '../constants/waterPhotoTypes';
 import { formatGeoCaption } from '../utils/geoPhoto';
+import { formatVendorPlates } from '../utils/waterVehiclePlates';
 import {
   waterFormFieldStatus,
   waterPhotoTypeStatus,
@@ -39,20 +40,23 @@ const CHECKLIST = [
 ];
 
 function SectionHeader({ step, title, complete }) {
+  const numbered = step != null;
   return (
     <View style={localStyles.sectionHeader}>
-      <View
-        style={[
-          localStyles.sectionStepBadge,
-          complete && localStyles.sectionStepBadgeDone,
-        ]}
-      >
-        {complete ? (
-          <Ionicons name="checkmark" size={12} color="#0F172A" />
-        ) : (
-          <Text style={localStyles.sectionStepText}>{step}</Text>
-        )}
-      </View>
+      {numbered ? (
+        <View
+          style={[
+            localStyles.sectionStepBadge,
+            complete && localStyles.sectionStepBadgeDone,
+          ]}
+        >
+          {complete ? (
+            <Ionicons name="checkmark" size={12} color="#0F172A" />
+          ) : (
+            <Text style={localStyles.sectionStepText}>{step}</Text>
+          )}
+        </View>
+      ) : null}
       <Text style={localStyles.sectionHeaderText}>{title}</Text>
     </View>
   );
@@ -80,36 +84,6 @@ function FieldRow({ label, value, onChangeText, icon, filled, keyboardType = 'de
         value={value}
         onChangeText={onChangeText}
       />
-    </View>
-  );
-}
-
-function PhotoChecklistTile({ label, hint, icon, captured }) {
-  return (
-    <View
-      style={[
-        localStyles.checklistTile,
-        captured && localStyles.checklistTileDone,
-      ]}
-    >
-      <View
-        style={[
-          localStyles.checklistIcon,
-          captured && localStyles.checklistIconDone,
-        ]}
-      >
-        <Ionicons
-          name={captured ? 'checkmark' : icon}
-          size={captured ? 18 : 16}
-          color={captured ? '#0F172A' : SEC.teal}
-        />
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={localStyles.checklistLabel}>{label}</Text>
-        <Text style={localStyles.checklistHint}>
-          {captured ? '✓ Captured' : hint}
-        </Text>
-      </View>
     </View>
   );
 }
@@ -154,15 +128,29 @@ export function WaterRecordForm({
         visible={visible}
         onClose={onClose}
         title="Record tanker water"
-        theme={SEC}
+        theme={WATER}
         maxHeight="92%"
         footer={
-          <ModuleSaveButton
-            theme={SEC}
-            label={submitDisabled ? 'Complete all 4 photos to submit' : 'Submit entry'}
-            onPress={onSave}
-            disabled={submitDisabled}
-          />
+          <View style={localStyles.formFooter}>
+            <TouchableOpacity
+              style={localStyles.cancelBtn}
+              onPress={onClose}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Close form"
+            >
+              <Ionicons name="close" size={18} color={WATER.textMuted} />
+              <Text style={localStyles.cancelBtnText}>Close</Text>
+            </TouchableOpacity>
+            <View style={localStyles.formFooterSubmit}>
+              <ModuleSaveButton
+                theme={WATER}
+                label={submitDisabled ? 'Complete all 4 photos to submit' : 'Submit entry'}
+                onPress={onSave}
+                disabled={submitDisabled}
+              />
+            </View>
+          </View>
         }
       >
         <SectionHeader step={1} title="Tanker vendor" complete={vendorPicked} />
@@ -208,25 +196,9 @@ export function WaterRecordForm({
 
         <SectionHeader
           step={3}
-          title={`Required photos (${typesCapturedCount}/4)`}
+          title={`Photos (${typesCapturedCount}/4)`}
           complete={allPhotosCaptured}
         />
-        <View style={localStyles.checklistGrid}>
-          {CHECKLIST.map((c) => (
-            <PhotoChecklistTile
-              key={c.type}
-              label={c.label}
-              hint={c.hint}
-              icon={c.icon}
-              captured={photoTypeStatus[
-                c.type === WATER_PHOTO_TYPES.OPENING ? 'opening' :
-                c.type === WATER_PHOTO_TYPES.CLOSING ? 'closing' :
-                c.type === WATER_PHOTO_TYPES.TDS ? 'tds' : 'vehicle'
-              ]}
-            />
-          ))}
-        </View>
-
         <TouchableOpacity
           style={[
             localStyles.captureBtn,
@@ -384,11 +356,7 @@ export function WaterRecordForm({
 
         {allPhotosCaptured ? (
           <>
-            <SectionHeader
-              step={4}
-              title="Readings (verify & edit if needed)"
-              complete={allFieldsFilled}
-            />
+            <SectionHeader title="Readings" complete={allFieldsFilled} />
             <TouchableOpacity
               onPress={() =>
                 setForm((p) => ({
@@ -462,8 +430,8 @@ export function WaterRecordForm({
         )}
 
         <SectionHeader
-          step={5}
-          title="Confirm & submit"
+          step={4}
+          title="Confirm"
           complete={form.userValidated && allPhotosCaptured && allFieldsFilled}
         />
         <View style={localStyles.statusGrid}>
@@ -533,7 +501,18 @@ export function WaterRecordForm({
       <Modal visible={vendorPickerOpen} transparent animationType="fade" onRequestClose={() => setVendorPickerOpen(false)}>
         <Pressable style={localStyles.pickerOverlay} onPress={() => setVendorPickerOpen(false)}>
           <Pressable style={localStyles.pickerSheet} onPress={(e) => e.stopPropagation()}>
-            <Text style={localStyles.pickerTitle}>Select tanker vendor</Text>
+            <View style={localStyles.pickerHeader}>
+              <Text style={localStyles.pickerTitle}>Select tanker vendor</Text>
+              <TouchableOpacity
+                onPress={() => setVendorPickerOpen(false)}
+                style={localStyles.pickerCloseBtn}
+                hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel="Close vendor list"
+              >
+                <Ionicons name="close" size={22} color={SEC.textMuted} />
+              </TouchableOpacity>
+            </View>
             {vendors.length === 0 ? (
               <View style={localStyles.emptyVendorBox}>
                 <Ionicons name="business-outline" size={32} color={SEC.textDim} />
@@ -567,7 +546,7 @@ export function WaterRecordForm({
                   }}
                 >
                   <Text style={localStyles.pickerItemName}>{v.name}</Text>
-                  <Text style={localStyles.pickerItemSub}>{v.vehicleNo}</Text>
+                  <Text style={localStyles.pickerItemSub}>{formatVendorPlates(v)}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -584,8 +563,24 @@ export function WaterVendorForm({ visible, onClose, form, setForm, onSave }) {
       visible={visible}
       onClose={onClose}
       title="Add tanker vendor"
-      theme={SEC}
-      footer={<ModuleSaveButton theme={SEC} label="Save vendor" onPress={onSave} />}
+      theme={WATER}
+      footer={
+        <View style={localStyles.formFooter}>
+          <TouchableOpacity
+            style={localStyles.cancelBtn}
+            onPress={onClose}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="Close form"
+          >
+            <Ionicons name="close" size={18} color={WATER.textMuted} />
+            <Text style={localStyles.cancelBtnText}>Close</Text>
+          </TouchableOpacity>
+          <View style={localStyles.formFooterSubmit}>
+            <ModuleSaveButton theme={WATER} label="Save vendor" onPress={onSave} />
+          </View>
+        </View>
+      }
     >
       <Text style={wf.hint}>Register a tanker supplier for quick selection when logging water entries.</Text>
       <TextInput
@@ -597,26 +592,11 @@ export function WaterVendorForm({ visible, onClose, form, setForm, onSave }) {
       />
       <TextInput
         style={wf.input}
-        placeholder="Contact number"
+        placeholder="Tanker capacity (KL, optional)"
         placeholderTextColor={W_PLACEHOLDER}
-        keyboardType="phone-pad"
-        value={form.contactNumber}
-        onChangeText={(v) => setForm((p) => ({ ...p, contactNumber: v }))}
-      />
-      <TextInput
-        style={[wf.input, wf.inputMultiline]}
-        placeholder="Address"
-        placeholderTextColor={W_PLACEHOLDER}
-        multiline
-        value={form.address}
-        onChangeText={(v) => setForm((p) => ({ ...p, address: v }))}
-      />
-      <TextInput
-        style={wf.input}
-        placeholder="Vehicle no."
-        placeholderTextColor={W_PLACEHOLDER}
-        value={form.vehicleNo}
-        onChangeText={(v) => setForm((p) => ({ ...p, vehicleNo: v }))}
+        keyboardType="decimal-pad"
+        value={form.tankerCapacityKl}
+        onChangeText={(v) => setForm((p) => ({ ...p, tankerCapacityKl: v }))}
       />
     </LedgerFormModal>
   );
@@ -696,49 +676,6 @@ const localStyles = StyleSheet.create({
     fontWeight: '800',
     color: SEC.text,
     letterSpacing: 0.3,
-  },
-  checklistGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-    marginBottom: 12,
-  },
-  checklistTile: {
-    width: '48%',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    padding: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: SEC.border,
-    backgroundColor: SEC.surfaceRaised,
-  },
-  checklistTileDone: {
-    borderColor: 'rgba(74, 222, 128, 0.55)',
-    backgroundColor: 'rgba(74, 222, 128, 0.08)',
-  },
-  checklistIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    backgroundColor: 'rgba(62, 232, 197, 0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  checklistIconDone: {
-    backgroundColor: '#4ADE80',
-  },
-  checklistLabel: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: SEC.text,
-    marginBottom: 1,
-  },
-  checklistHint: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: SEC.textMuted,
   },
   captureBtn: {
     flexDirection: 'row',
@@ -1064,11 +1001,28 @@ const localStyles = StyleSheet.create({
     padding: 16,
     maxHeight: '50%',
   },
+  pickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  pickerCloseBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: SEC.bg,
+    borderWidth: 1,
+    borderColor: SEC.border,
+  },
   pickerTitle: {
+    flex: 1,
     fontSize: 14,
     fontWeight: '800',
     color: SEC.text,
-    marginBottom: 12,
+    marginBottom: 0,
   },
   pickerList: {
     maxHeight: 280,
@@ -1095,5 +1049,31 @@ const localStyles = StyleSheet.create({
     fontSize: 11,
     color: SEC.textMuted,
     marginTop: 2,
+  },
+  formFooter: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 10,
+  },
+  cancelBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    minHeight: 48,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: SEC.border,
+    backgroundColor: SEC.surfaceRaised,
+  },
+  cancelBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: SEC.textMuted,
+  },
+  formFooterSubmit: {
+    flex: 1,
+    minWidth: 0,
   },
 });

@@ -54,9 +54,21 @@ export default function LedgerFormModal({
           <View style={[styles.sheet, { maxHeight }]}>
             <View style={styles.handle} />
             <View style={styles.header}>
-              <Text style={styles.title}>{title}</Text>
-              <Pressable onPress={onClose} style={styles.closeBtn} hitSlop={12}>
-                <Ionicons name="close" size={22} color={theme.textMuted} />
+              <Text style={styles.title} numberOfLines={2}>
+                {title}
+              </Text>
+              <Pressable
+                onPress={onClose}
+                style={styles.closeBtn}
+                hitSlop={16}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+              >
+                <Ionicons
+                  name="close"
+                  size={22}
+                  color={theme.textMuted ?? theme.text}
+                />
               </Pressable>
             </View>
             {scrollable ? (
@@ -137,8 +149,12 @@ function createStyles(theme, sheetMaxWidth = 400) {
       paddingTop: 8,
       width: '100%',
       flexDirection: 'column',
+      overflow: 'hidden',
       ...Platform.select({
-        web: { boxShadow: '0 -12px 48px rgba(0,0,0,0.55)' },
+        web: {
+          boxShadow: '0 -12px 48px rgba(0,0,0,0.55)',
+          maxHeight: '92vh',
+        },
         default: {},
       }),
     },
@@ -155,6 +171,13 @@ function createStyles(theme, sheetMaxWidth = 400) {
       alignItems: 'center',
       justifyContent: 'space-between',
       marginBottom: 8,
+      flexShrink: 0,
+      zIndex: 100,
+      backgroundColor: theme.surface,
+      ...Platform.select({
+        web: { position: 'sticky', top: 0 },
+        default: {},
+      }),
     },
     title: {
       ...SEC_FONTS.modalTitle,
@@ -162,11 +185,25 @@ function createStyles(theme, sheetMaxWidth = 400) {
       color: theme.text,
     },
     closeBtn: {
-      padding: 4,
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.surfaceRaised ?? 'rgba(255,255,255,0.08)',
+      borderWidth: 1,
+      borderColor: theme.border ?? theme.inputBorder,
+      marginLeft: 10,
+      flexShrink: 0,
+      zIndex: 110,
+      ...Platform.select({
+        web: { cursor: 'pointer' },
+        default: {},
+      }),
     },
     scroll: {
-      flexGrow: 1,
-      flexShrink: 1,
+      flex: 1,
+      minHeight: 0,
     },
     scrollContent: {
       paddingBottom: 8,

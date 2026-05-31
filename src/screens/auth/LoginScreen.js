@@ -17,7 +17,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../context/AuthContext';
-import { TEST_LOGIN } from '../../constants/testAccounts';
 
 const { width, height } = Dimensions.get('window');
 const isWeb = Platform.OS === 'web';
@@ -267,14 +266,8 @@ export default function LoginScreen() {
 
   const primaryLoading = isCreate ? (otpSent ? loggingIn : sendingOtp) : loggingIn;
 
-  const quickAccount = activeTab === 'resident' ? TEST_LOGIN.resident : TEST_LOGIN.admin;
-
-  const fillQuickLogin = () => {
-    setUsername(quickAccount.username);
-    setPassword(quickAccount.password);
-  };
-
   const year = new Date().getFullYear();
+  const isAdminTab = activeTab === 'admin';
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
@@ -441,19 +434,16 @@ export default function LoginScreen() {
                   }
                 />
 
-                <View style={styles.testLoginBox}>
-                  <Text style={styles.testLoginTitle}>Test login (tap to fill)</Text>
-                  <Pressable style={styles.testLoginChip} onPress={fillQuickLogin}>
-                    <Ionicons
-                      name={activeTab === 'resident' ? 'home-outline' : 'shield-checkmark-outline'}
-                      size={14}
-                      color={UI.teal}
-                    />
-                    <Text style={styles.testLoginChipText}>
-                      {quickAccount.label}: {quickAccount.hint}
+                {isAdminTab ? (
+                  <View style={styles.adminRoleHintBox}>
+                    <Ionicons name="shield-checkmark-outline" size={16} color={UI.teal} />
+                    <Text style={styles.adminRoleHintText}>
+                      Operations sign-in: Administrator (full access), Security Supervisor, or
+                      FM / Housekeeping. Access tokens expire after 30 minutes; your session
+                      refreshes securely for up to 7 days.
                     </Text>
-                  </Pressable>
-                </View>
+                  </View>
+                ) : null}
               </>
             )}
 
@@ -481,16 +471,23 @@ export default function LoginScreen() {
 
             <View style={styles.divider} />
 
-            <View style={styles.signupRow}>
-              <Text style={styles.signupMuted}>
-                {isCreate ? 'Already have an account? ' : "Don't have an account? "}
-              </Text>
-              <Pressable onPress={isCreate ? switchToSignIn : switchToCreate}>
-                <Text style={styles.signupLink}>
-                  {isCreate ? 'Sign in' : 'Create one'}
-                </Text>
-              </Pressable>
-            </View>
+            {isCreate || isAdminTab ? null : (
+              <View style={styles.signupRow}>
+                <Text style={styles.signupMuted}>Don&apos;t have an account? </Text>
+                <Pressable onPress={switchToCreate}>
+                  <Text style={styles.signupLink}>Create one</Text>
+                </Pressable>
+              </View>
+            )}
+
+            {isCreate ? (
+              <View style={styles.signupRow}>
+                <Text style={styles.signupMuted}>Already have an account? </Text>
+                <Pressable onPress={switchToSignIn}>
+                  <Text style={styles.signupLink}>Sign in</Text>
+                </Pressable>
+              </View>
+            ) : null}
 
             <Text style={styles.cardFooter}>
               © {year}{' '}
@@ -743,7 +740,10 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
 
-  testLoginBox: {
+  adminRoleHintBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
     marginTop: 4,
     marginBottom: 6,
     padding: 12,
@@ -752,23 +752,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(62, 232, 197, 0.15)',
   },
-  testLoginTitle: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: UI.label,
-    letterSpacing: 1,
-    marginBottom: 8,
-    textTransform: 'uppercase',
-  },
-  testLoginChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  testLoginChipText: {
-    fontSize: 13,
-    color: UI.teal,
-    fontWeight: '600',
+  adminRoleHintText: {
+    flex: 1,
+    fontSize: 12,
+    color: UI.muted,
+    lineHeight: 17,
   },
 
   signInPressable: {

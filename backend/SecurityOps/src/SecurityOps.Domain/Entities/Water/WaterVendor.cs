@@ -7,7 +7,11 @@ public class WaterVendor
     public string Name { get; set; } = string.Empty;
     public string? ContactNumber { get; set; }
     public string? Address { get; set; }
+
+    /// <summary>Deprecated — use <see cref="Vehicles"/>. Mirrored column on water_vendors.</summary>
     public string? VehicleNo { get; set; }
+
+    public ICollection<WaterVendorVehicle> Vehicles { get; set; } = new List<WaterVendorVehicle>();
 
     /// <summary>
     /// Declared tanker capacity in kilolitres. Used to compute the "Declared KL"

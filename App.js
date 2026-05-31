@@ -5,6 +5,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import AppErrorBoundary from './src/components/AppErrorBoundary';
 import { AuthProvider } from './src/context/AuthContext';
+import { ToastProvider } from './src/context/ToastContext';
 import RootNavigator from './src/navigation/RootNavigator';
 
 export default function App() {
@@ -30,7 +31,9 @@ export default function App() {
       <SafeAreaProvider initialMetrics={initialWindowMetrics}>
         <AppErrorBoundary>
           <AuthProvider>
-            <RootNavigator />
+            <ToastProvider>
+              <RootNavigator />
+            </ToastProvider>
           </AuthProvider>
         </AppErrorBoundary>
       </SafeAreaProvider>

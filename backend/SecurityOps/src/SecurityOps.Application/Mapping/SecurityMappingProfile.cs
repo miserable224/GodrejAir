@@ -9,6 +9,7 @@ public sealed class SecurityMappingProfile : Profile
     public SecurityMappingProfile()
     {
         CreateMap<SecurityStaff, StaffResponse>();
+        CreateMap<DutyDesignation, DesignationResponse>();
         CreateMap<SecurityLocation, LocationResponse>();
         CreateMap<SecurityShift, ShiftResponse>();
         CreateMap<SecurityShiftDeployment, DeploymentResponse>();

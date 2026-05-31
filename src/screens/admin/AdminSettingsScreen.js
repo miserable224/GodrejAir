@@ -22,15 +22,6 @@ const SETTINGS_SECTIONS = [
     label: 'Actions',
     items: [
       {
-        id: 'recordPatrol',
-        title: 'Patrolling',
-        subtitle: 'Record patrol from Home → Security',
-        icon: 'walk-outline',
-        color: '#0F766E',
-        moduleId: 'Security',
-        homeAction: 'recordPatrol',
-      },
-      {
         id: 'addPromotions',
         title: 'Book Promotion',
         subtitle: 'Dates, vendor, board member & GST 18%',

@@ -49,7 +49,7 @@ builder.Services.AddSwaggerGen(c =>
         Scheme = "bearer",
         BearerFormat = "JWT",
         In = ParameterLocation.Header,
-        Description = "Paste JWT (Bearer token from /api/auth/dev-token when enabled)."
+        Description = "Paste JWT (Bearer accessToken from POST /api/auth/login)."
     };
     c.AddSecurityDefinition("Bearer", bearer);
     c.AddSecurityRequirement(new OpenApiSecurityRequirement
