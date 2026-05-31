@@ -103,6 +103,7 @@ import {
   createEmptyWaterForm,
   isWaterFormReadyToSubmit,
   nextWaterPhotoCaptureType,
+  normalizeMeterReading,
 } from '../../utils/waterFormHelpers';
 import { HK, WATER } from '../../constants/moduleThemes';
 import { ensureValidAccessToken } from '../../modules/shared';
@@ -917,8 +918,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
         source: r.source ?? '',
         sourceType: r.sourceType ?? 'tanker',
         vehicleNo: r.vehicleNo ?? '',
-        openingMeter: r.openingMeter ?? '',
-        closingMeter: r.closingMeter ?? '',
+        openingMeter: normalizeMeterReading(r.openingMeter ?? ''),
+        closingMeter: normalizeMeterReading(r.closingMeter ?? ''),
         tds: r.tds ?? '',
         load: r.load ?? '',
         tankLevelKl: r.tankLevelKl ?? '',
@@ -1739,7 +1740,9 @@ export default function AdminDashboardScreen({ navigation, route }) {
       return;
     }
 
-    const computedLoad = computeWaterLoad(waterForm.openingMeter, waterForm.closingMeter) || '1';
+    const openingMeter = normalizeMeterReading(waterForm.openingMeter.trim());
+    const closingMeter = normalizeMeterReading(waterForm.closingMeter.trim());
+    const computedLoad = computeWaterLoad(openingMeter, closingMeter) || '1';
     const vendorId = waterForm.tankerVendorId || null;
     // Only forward UUID-style vendor IDs to the API; locally-generated `v-001`,
     // `v-${Date.now()}` placeholders (from the legacy seed data) would fail the
@@ -1776,8 +1779,8 @@ export default function AdminDashboardScreen({ navigation, route }) {
         source: waterForm.source.trim() || 'Tanker',
         sourceType: 'tanker',
         vehicleNo: waterForm.vehicleNo.trim(),
-        openingMeter: waterForm.openingMeter.trim(),
-        closingMeter: waterForm.closingMeter.trim(),
+        openingMeter,
+        closingMeter,
         tds: waterForm.tds.trim(),
         load: computedLoad,
         vendorId: apiVendorId,

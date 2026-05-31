@@ -15,7 +15,7 @@
 import { getSecurityApiOrigin, resolveSecurityApiOrigin } from '../modules/shared/config/apiConfig';
 import { fetchWithNetworkHint } from '../modules/shared/utils/networkError';
 import { ensureValidAccessToken, forceRefreshAccessToken } from '../modules/shared/services/authService';
-import { normalizeToKl } from '../utils/waterFormHelpers';
+import { normalizeToKl, normalizeMeterReading, computeWaterLoad } from '../utils/waterFormHelpers';
 
 function apiBase() {
   return `${getSecurityApiOrigin()}/api`;
@@ -186,10 +186,17 @@ export async function createWaterRecord(record, { signal } = {}) {
       source: record.source || null,
       sourceType: record.sourceType || 'tanker',
       vehicleNo: record.vehicleNo || null,
-      openingMeter: record.openingMeter || null,
-      closingMeter: record.closingMeter || null,
+      openingMeter: record.openingMeter
+        ? normalizeMeterReading(record.openingMeter)
+        : null,
+      closingMeter: record.closingMeter
+        ? normalizeMeterReading(record.closingMeter)
+        : null,
       tds: record.tds || null,
-      load: record.load || null,
+      load:
+        record.load ||
+        computeWaterLoad(record.openingMeter, record.closingMeter) ||
+        null,
       tankLevelKl: record.tankLevelKl || null,
       vendorId: record.vendorId || null,
       notes: record.notes || null,

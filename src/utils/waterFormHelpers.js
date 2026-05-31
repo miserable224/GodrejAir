@@ -88,6 +88,65 @@ function parseMeterNum(value) {
   return parseFloat(String(value).replace(/,/g, '').replace(/\s/g, ''));
 }
 
+/** Typical single tanker delivery is ~6–20 KL (6,000–20,000 L). */
+const MIN_TANKER_LOAD_KL = 4;
+const MAX_TANKER_LOAD_KL = 25;
+
+/**
+ * Tanker cumulative meters often arrive from OCR without a decimal point.
+ *   780043   → 78004.3   (6 digits → 1 decimal place)
+ *   7797965  → 77979.65  (7+ digits → 2 decimal places)
+ * Values that already contain "." or are too short are left unchanged.
+ */
+export function normalizeMeterReading(value) {
+  if (value == null) return '';
+  const raw = String(value)
+    .trim()
+    .replace(/,/g, '')
+    .replace(/\s/g, '')
+    .replace(/m³|m3/gi, '');
+  if (!raw) return '';
+  if (raw.includes('.')) return raw;
+
+  const digits = raw.replace(/^0+/, '') || '0';
+  const len = digits.length;
+  if (len >= 7) {
+    return `${digits.slice(0, -2)}.${digits.slice(-2)}`;
+  }
+  if (len === 6) {
+    return `${digits.slice(0, -1)}.${digits.slice(-1)}`;
+  }
+  return raw;
+}
+
+function parseMeterPair(openingRaw, closingRaw) {
+  const opening = parseMeterNum(normalizeMeterReading(openingRaw));
+  const closing = parseMeterNum(normalizeMeterReading(closingRaw));
+  return { opening, closing };
+}
+
+/** Convert meter delta to kilolitres (1 m³ ≈ 1 KL). */
+function meterDeltaToKl(opening, closing) {
+  const rawDelta = closing - opening;
+  if (!Number.isFinite(rawDelta) || rawDelta <= 0) return 0;
+
+  if (rawDelta <= MAX_TANKER_LOAD_KL) {
+    return rawDelta;
+  }
+
+  // Fallback when cumulative readings were stored without decimal normalization.
+  if (opening >= 1000 && closing >= 1000) {
+    for (const divisor of [10, 100, 1000]) {
+      const kl = rawDelta / divisor;
+      if (kl >= MIN_TANKER_LOAD_KL && kl <= MAX_TANKER_LOAD_KL) {
+        return kl;
+      }
+    }
+  }
+
+  return normalizeToKl(rawDelta);
+}
+
 /**
  * Normalize a reading to kilolitres (1 KL = 1000 L).
  * Values ≥ 1000 are treated as litres (e.g. 12500 → 12.5 KL).
@@ -101,21 +160,20 @@ export function normalizeToKl(raw) {
 
 /** Measured delivery volume (KL) from meter delta, else stored load field. */
 export function measuredKlFromRecord(record) {
-  const opening = parseMeterNum(record?.openingMeter);
-  const closing = parseMeterNum(record?.closingMeter);
+  const { opening, closing } = parseMeterPair(record?.openingMeter, record?.closingMeter);
   if (Number.isFinite(opening) && Number.isFinite(closing) && closing > opening) {
-    return normalizeToKl(closing - opening);
+    return meterDeltaToKl(opening, closing);
   }
   return normalizeToKl(record?.load);
 }
 
 export function computeWaterLoad(openingMeter, closingMeter) {
-  const o = parseMeterNum(openingMeter);
-  const c = parseMeterNum(closingMeter);
-  if (!Number.isFinite(o) || !Number.isFinite(c) || c < o) return '';
-  const kl = normalizeToKl(c - o);
+  const { opening, closing } = parseMeterPair(openingMeter, closingMeter);
+  if (!Number.isFinite(opening) || !Number.isFinite(closing) || closing < opening) return '';
+  const kl = meterDeltaToKl(opening, closing);
   if (kl <= 0) return '';
-  return Number.isInteger(kl) ? String(kl) : kl.toFixed(1);
+  if (Number.isInteger(kl)) return String(kl);
+  return kl.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
 }
 
 /**
@@ -168,8 +226,8 @@ function reconcileMeterPhotos(form) {
   return {
     ...form,
     photos: nextPhotos,
-    openingMeter: lowest.detectedValue,
-    closingMeter: highest.detectedValue,
+    openingMeter: normalizeMeterReading(lowest.detectedValue),
+    closingMeter: normalizeMeterReading(highest.detectedValue),
   };
 }
 
@@ -183,10 +241,10 @@ export function applyWaterOcrToForm(form, scanResult) {
 
   switch (type) {
     case WATER_PHOTO_TYPES.OPENING:
-      if (value) next.openingMeter = value;
+      if (value) next.openingMeter = normalizeMeterReading(value);
       break;
     case WATER_PHOTO_TYPES.CLOSING:
-      if (value) next.closingMeter = value;
+      if (value) next.closingMeter = normalizeMeterReading(value);
       break;
     case WATER_PHOTO_TYPES.TDS:
       if (value) next.tds = value;
@@ -196,13 +254,14 @@ export function applyWaterOcrToForm(form, scanResult) {
       break;
     case 'meter_reading':
       if (value) {
-        if (!next.openingMeter) next.openingMeter = value;
-        else if (!next.closingMeter) next.closingMeter = value;
+        const normalized = normalizeMeterReading(value);
+        if (!next.openingMeter) next.openingMeter = normalized;
+        else if (!next.closingMeter) next.closingMeter = normalized;
       }
       break;
     case 'multi':
-      if (scanResult.opening) next.openingMeter = scanResult.opening;
-      if (scanResult.closing) next.closingMeter = scanResult.closing;
+      if (scanResult.opening) next.openingMeter = normalizeMeterReading(scanResult.opening);
+      if (scanResult.closing) next.closingMeter = normalizeMeterReading(scanResult.closing);
       if (scanResult.tds) next.tds = scanResult.tds;
       if (scanResult.vehicle) next.vehicleNo = scanResult.vehicle;
       break;
